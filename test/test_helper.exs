@@ -28,26 +28,43 @@ defmodule CabbageTestHelper do
   end
 
   defp versioned_callbacks() do
-    System.version()
-    |> then(&{Version.compare(&1, "1.6.6"), Version.compare(&1, "1.15.0")})
-    |> case do
-      {:lt, _} ->
-        {&ExUnit.Server.add_sync_case/1, &ExUnit.Server.cases_loaded/0, &fix_13_elixir_test_result/1}
+    {resolve_add_module(), resolve_load_modules(), resolve_result_fix()}
+  end
 
-      {:eq, _} ->
-        {&ExUnit.Server.add_async_module/1, &ExUnit.Server.modules_loaded/0, &fix_13_elixir_test_result/1}
+  defp resolve_add_module() do
+    cond do
+      function_exported?(ExUnit.Server, :add_module, 2) ->
+        fn mod ->
+          apply(ExUnit.Server, :add_module, [mod, %{async?: false, group: nil, parameterize: nil}])
+        end
 
-      {_, :lt} ->
-        {&ExUnit.Server.add_sync_module/1, &ExUnit.Server.modules_loaded/0, &fix_17_elixir_test_result/1}
+      function_exported?(ExUnit.Server, :add_sync_module, 1) ->
+        &apply(ExUnit.Server, :add_sync_module, [&1])
 
-      {_, _} ->
-        {&ExUnit.Server.add_sync_module/1, fn -> ExUnit.Server.modules_loaded(true) end, &fix_17_elixir_test_result/1}
+      true ->
+        &apply(ExUnit.Server, :add_sync_case, [&1])
     end
   end
 
-  defp fix_17_elixir_test_result(result), do: result
-
-  defp fix_13_elixir_test_result(result) do
-    Map.merge(result, %{excluded: Map.get(result, :skipped, 0), skipped: 0})
+  defp resolve_load_modules() do
+    if function_exported?(ExUnit.Server, :modules_loaded, 1) do
+      fn -> apply(ExUnit.Server, :modules_loaded, [true]) end
+    else
+      fn -> apply(ExUnit.Server, :modules_loaded, []) end
+    end
   end
+
+  defp resolve_result_fix() do
+    version = Version.parse!(System.version())
+
+    cond do
+      Version.match?(version, ">= 1.17.0") -> &normalize_runner_result/1
+      Version.match?(version, ">= 1.13.0") -> & &1
+      true -> fn result -> Map.merge(result, %{excluded: Map.get(result, :skipped, 0), skipped: 0}) end
+    end
+  end
+
+  # Elixir 1.17+ changed `ExUnit.Runner.run/2` to return `{result, _}`.
+  defp normalize_runner_result({result, _}), do: result
+  defp normalize_runner_result(result), do: result
 end

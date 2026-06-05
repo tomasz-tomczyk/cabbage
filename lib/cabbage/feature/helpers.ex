@@ -104,4 +104,24 @@ defmodule Cabbage.Feature.Helpers do
         tag
     end)
   end
+
+  @doc false
+  # Normalizes the ExUnit `setup` context into a plain map. Older Elixir versions
+  # passed `nil` when no context was present; newer ones pass a keyword list.
+  def to_map(value) when is_map(value), do: value
+  def to_map(value) when is_list(value), do: Map.new(value)
+  def to_map(nil), do: %{}
+
+  @doc false
+  # Version-conditional wrapper around `ExUnit.Case.register_test`. Elixir 1.16+
+  # exposes the 6-arity form (`module, file, line, type, name, tags`) and
+  # deprecated the 4-arity `(env, type, name, tags)` form. We call whichever is
+  # available so cabbage compiles warning-free across Elixir 1.15 - 1.19.
+  def register_test(env, test_type, name, tags) do
+    if function_exported?(ExUnit.Case, :register_test, 6) do
+      apply(ExUnit.Case, :register_test, [env.module, env.file, env.line, test_type, name, tags])
+    else
+      apply(ExUnit.Case, :register_test, [env, test_type, name, tags])
+    end
+  end
 end
