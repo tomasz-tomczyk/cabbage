@@ -243,6 +243,13 @@ defmodule Cabbage.Feature do
     end)
   end
 
+  @doc """
+  Compiles a single Gherkin `step` into the quoted ExUnit expression that runs it.
+
+  Used at compile time by `__before_compile__/1`; `steps` is the list of registered step
+  definition ASTs and `scenario_name` scopes the generated state lookups.
+  """
+  @spec compile_step(struct(), [Macro.t()], String.t()) :: Macro.t()
   def compile_step(step, steps, scenario_name) when is_list(steps) do
     step_type = step.keyword
 
