@@ -9,8 +9,10 @@ defmodule Cabbage.Conformance.CCK.Steps do
   realistic). These are test fixtures, not shipped library code.
 
   Step outcome protocol (see `Cabbage.Messages`): returning `"pending"`/`"skipped"` sets
-  that status, raising marks the step FAILED, anything else PASSES. `{:ok, world}` threads
-  scenario world state across steps.
+  that status (no exception); raising `Cabbage.PendingError`/`Cabbage.SkippedError` sets
+  PENDING/SKIPPED *with* the reference exception type; raising anything else marks the
+  step FAILED; anything else PASSES. `{:ok, world}` threads scenario world state across
+  steps.
   """
 
   alias Cabbage.Messages.StepRegistry
@@ -169,6 +171,45 @@ defmodule Cabbage.Conformance.CCK.Steps do
   def for("multiple-features-reversed") do
     StepRegistry.new()
     |> add("an order for {string}", "multiple-features-reversed", 3, fn _args -> :ok end)
+  end
+
+  def for("all-statuses") do
+    StepRegistry.new()
+    |> add(~r/^a step$/, "all-statuses", 3, fn _args -> :ok end)
+    |> add(~r/^a failing step$/, "all-statuses", 5, fn _args -> raise "whoops" end)
+    |> add(~r/^a pending step$/, "all-statuses", 9, fn _args -> "pending" end)
+    |> add(~r/^a skipped step$/, "all-statuses", 13, fn _args -> "skipped" end)
+    |> add(~r/^an ambiguous (.*?)$/, "all-statuses", 17, fn _args -> :ok end)
+    |> add(~r/^(.*?) ambiguous step$/, "all-statuses", 19, fn _args -> :ok end)
+  end
+
+  def for("failedish-combinations") do
+    StepRegistry.new()
+    |> add(~r/^a step$/, "failedish-combinations", 3, fn _args -> :ok end)
+    |> add(~r/^a skipped step$/, "failedish-combinations", 7, fn _args -> "skipped" end)
+    |> add(~r/^a pending step$/, "failedish-combinations", 11, fn _args -> "pending" end)
+    |> add(~r/^an ambiguous (.*?)$/, "failedish-combinations", 15, fn _args -> :ok end)
+    |> add(~r/^(.*?) ambiguous step$/, "failedish-combinations", 17, fn _args -> :ok end)
+    |> add(~r/^a failing step$/, "failedish-combinations", 19, fn _args -> raise "whoops" end)
+  end
+
+  def for("stack-traces") do
+    StepRegistry.new()
+    |> add("a step throws an exception", "stack-traces", 3, fn -> raise "BOOM" end)
+  end
+
+  def for("pending-exception") do
+    StepRegistry.new()
+    |> add("an unimplemented pending step", "pending-exception", 3, fn ->
+      raise Cabbage.PendingError, "TODO"
+    end)
+  end
+
+  def for("skipped-exception") do
+    StepRegistry.new()
+    |> add("I skip a step", "skipped-exception", 3, fn ->
+      raise Cabbage.SkippedError, "skipping"
+    end)
   end
 
   # ---- helpers ---------------------------------------------------------------

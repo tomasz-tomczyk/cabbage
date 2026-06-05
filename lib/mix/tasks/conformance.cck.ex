@@ -34,6 +34,15 @@ defmodule Mix.Tasks.Conformance.Cck do
     unknown-parameter-type unused-steps
   )
 
+  # Why each not-yet-targeted area is deferred. Hook/attachment/param-type/retry/regex
+  # areas await their own waves; `test-run-exception` is intentionally *not* graded as a
+  # normal run (its golden asserts a run-level crash, mirroring cucumber-js marking it
+  # UNSUPPORTED in its own CCK harness).
+  @deferral_reasons %{
+    "test-run-exception" => "asserts a run-level crash, not a normal gradeable run",
+    "skipped-failing-hook" => "requires hooks (hooks wave)"
+  }
+
   @impl Mix.Task
   def run(args) do
     {opts, _, _} = OptionParser.parse(args, switches: [verbose: :boolean])
@@ -56,6 +65,10 @@ defmodule Mix.Tasks.Conformance.Cck do
     end)
 
     Mix.shell().info("  unsupported (deferred): #{Enum.join(deferred, ", ")}")
+
+    Enum.each(@deferral_reasons, fn {area, reason} ->
+      if area in deferred, do: Mix.shell().info("    - #{area}: #{reason}")
+    end)
 
     :ok
   end

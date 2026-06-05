@@ -23,6 +23,7 @@ defmodule Cabbage.Conformance.CCK.Runner do
     minimal empty backgrounds data-tables doc-strings cdata rules rules-backgrounds
     examples-tables markdown multiple-features multiple-features-reversed unused-steps
     undefined pending skipped ambiguous
+    all-statuses failedish-combinations stack-traces pending-exception skipped-exception
   )
 
   @doc "The list of CCK sample areas this harness runs."

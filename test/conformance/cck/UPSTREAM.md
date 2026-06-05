@@ -28,7 +28,11 @@ is the authoritative pin.
   for reference only (re-implemented in Elixir under `steps.ex`); they are **not** compiled
   or shipped as code.
 
-Only the areas targeted by this wave are vendored (see `runner.ex` `@samples`).
+Only the areas targeted so far are vendored (see `runner.ex` `@samples`). The
+status/exception wave added `all-statuses`, `failedish-combinations`, `stack-traces`,
+`pending-exception`, and `skipped-exception` (all graded), plus `test-run-exception`
+(vendored but deferred: its golden asserts a run-level crash rather than a normal run, so
+it is listed `unsupported` in `mix conformance.cck`).
 
 ## Re-vendoring
 
