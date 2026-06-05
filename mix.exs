@@ -34,6 +34,7 @@ defmodule Cabbage.Mixfile do
       preferred_envs: [
         "conformance.tags": :test,
         "conformance.expressions": :test,
+        "conformance.cck": :test,
         conformance: :test
       ]
     ]
@@ -47,7 +48,7 @@ defmodule Cabbage.Mixfile do
   end
 
   # Specifies which paths to compile per environment.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "test/conformance/cck"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Dependencies can be Hex packages:
