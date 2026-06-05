@@ -24,7 +24,12 @@ defmodule Cabbage.Feature.Loader do
     %{scenario | steps: steps}
   end
 
-  defp fix_step_type(%Step{keyword: "And"} = current_step, [previous_step | _] = steps) do
+  # "And" and "But" are continuation keywords: they inherit the keyword of the
+  # preceding step (which has itself already been resolved by the reduce).
+  @inherited_keywords ~w(And But)
+
+  defp fix_step_type(%Step{keyword: keyword} = current_step, [previous_step | _] = steps)
+       when keyword in @inherited_keywords do
     fixed_step = %{current_step | keyword: previous_step.keyword}
     [fixed_step | steps]
   end
