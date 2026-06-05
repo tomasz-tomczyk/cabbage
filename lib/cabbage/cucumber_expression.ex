@@ -60,6 +60,32 @@ defmodule Cabbage.CucumberExpression do
   end
 
   @doc """
+  The `{type}` parameter type names referenced by `expression`, in order of appearance.
+
+  Parses the expression (raising on malformed syntax) but does *not* require the types
+  to be registered — callers can use this to detect an undefined parameter type before
+  `compile/2` would raise. For example, `{flight} from {airport}` returns
+  `["flight", "airport"]`.
+  """
+  @spec parameter_type_names(String.t()) :: [String.t()]
+  def parameter_type_names(expression) do
+    expression
+    |> Parser.parse()
+    |> collect_parameter_names([])
+    |> Enum.reverse()
+  end
+
+  defp collect_parameter_names(%{"type" => "PARAMETER_NODE"} = node, acc) do
+    [parameter_name(node) | acc]
+  end
+
+  defp collect_parameter_names(%{"nodes" => nodes}, acc) when is_list(nodes) do
+    Enum.reduce(nodes, acc, &collect_parameter_names/2)
+  end
+
+  defp collect_parameter_names(_node, acc), do: acc
+
+  @doc """
   Matches `text` against a compiled expression, returning the list of transformed
   argument values, or `nil` if there is no match.
   """
