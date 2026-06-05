@@ -25,12 +25,15 @@ defmodule Cabbage.Mixfile do
     ]
   end
 
-  # Run the tag-expression conformance scoreboard in :test, where the vendored
-  # corpus and the conformance harness live, without requiring MIX_ENV=test.
+  # Run the conformance scoreboards / suite in the :test environment (where the
+  # vendored corpora and harnesses live) without requiring MIX_ENV=test.
+  # `conformance.tags` and `conformance.expressions` are Mix.Tasks that print the
+  # scoreboards; `conformance` is the alias below that runs the tagged ExUnit suite.
   def cli do
     [
       preferred_envs: [
         "conformance.tags": :test,
+        "conformance.expressions": :test,
         conformance: :test
       ]
     ]
@@ -76,9 +79,8 @@ defmodule Cabbage.Mixfile do
     [
       publish: ["hex.publish", "hex.publish docs", "tag"],
       tag: &tag_release/1,
-      # Run the conformance suite (tagged :conformance, excluded by default).
-      # `mix conformance.tags` prints the richer scoreboard; this alias runs the
-      # per-corpus ExUnit assertions.
+      # Run the tagged conformance suite (excluded by default). The richer
+      # per-corpus scoreboards are `mix conformance.tags` / `mix conformance.expressions`.
       conformance: ["test --only conformance"]
     ]
   end

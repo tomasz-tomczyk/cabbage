@@ -9,25 +9,45 @@ defmodule Cabbage.Feature.Helpers do
     quote(do: nil)
   end
 
-  # A cucumber-expression parameter looks like `{name:type}`. When a string step
-  # pattern contains one, it goes through the cucumber-expression engine (which
-  # turns parameters into named captures). When it does NOT, the string is
-  # treated as an exact literal match - regex metacharacters ($, (, ), +, ., /,
-  # ...) are escaped so they match literally rather than being interpreted as
-  # regex syntax. See issue #64.
-  @parameter_format ~r/\{.+:.+\}/u
+  # cabbage understands three kinds of string step pattern, in priority order:
+  #
+  #   1. The legacy named-capture cucumber expression `{name:type}` (e.g.
+  #      `{count:int}`) -> `Cabbage.Feature.CucumberExpression`, which produces
+  #      named captures bound into the step's `vars` map.
+  #
+  #   2. A standard Cucumber Expression - it must contain at least one parameter
+  #      `{...}` (anonymous `{}` or typed `{int}`). Once it does, optional text
+  #      `(s)` and alternation `a/b` in the same pattern are honoured by the real
+  #      engine, `Cabbage.CucumberExpression` (cabbage-ex/cabbage#47).
+  #
+  #   3. Anything else is an exact literal match: regex metacharacters ($, (, ),
+  #      +, ., /, ...) are escaped so they match literally (see issue #64).
+  #
+  # Requiring a `{...}` parameter to opt in to case 2 keeps patterns like
+  # `It costs $5 (USD)` literal: with no parameter, the `(USD)` is *not* treated
+  # as optional text.
+  @named_parameter_format ~r/\{[^{}:]+:[^{}:]+\}/u
+  @standard_expression_format ~r/\{[^{}]*\}/u
 
   defp to_regex_ast(term) when is_binary(term) do
-    if Regex.match?(@parameter_format, term) do
-      regex_string = Cabbage.Feature.CucumberExpression.to_regex_string(term)
-      Code.string_to_quoted!("~r/#{regex_string}/")
-    else
-      regex = Regex.compile!("^" <> Regex.escape(term) <> "$")
-      Macro.escape(regex)
+    cond do
+      Regex.match?(@named_parameter_format, term) ->
+        regex_string = Cabbage.Feature.CucumberExpression.to_regex_string(term)
+        Code.string_to_quoted!("~r/#{regex_string}/")
+
+      Regex.match?(@standard_expression_format, term) ->
+        regex_string = Cabbage.CucumberExpression.to_regex(term, standard_registry())
+        Macro.escape(Regex.compile!(regex_string))
+
+      true ->
+        regex = Regex.compile!("^" <> Regex.escape(term) <> "$")
+        Macro.escape(regex)
     end
   end
 
   defp to_regex_ast(term), do: term
+
+  defp standard_registry, do: Cabbage.CucumberExpression.ParameterTypeRegistry.new()
 
   def add_tag(module, "@" <> tag_name, block), do: add_tag(module, tag_name, block)
 
