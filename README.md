@@ -1,35 +1,72 @@
 # Cabbage
 
-[![Coverage Status](https://coveralls.io/repos/github/cabbage-ex/cabbage/badge.svg?branch=master)](https://coveralls.io/github/cabbage-ex/cabbage?branch=master)
-[![CircleCI](https://circleci.com/gh/cabbage-ex/cabbage.svg?style=svg)](https://circleci.com/gh/cabbage-ex/cabbage)
-[![Hex.pm](https://img.shields.io/hexpm/v/cabbage.svg)]()
+[![CI](https://github.com/tomasz-tomczyk/cabbage/actions/workflows/ci.yml/badge.svg)](https://github.com/tomasz-tomczyk/cabbage/actions/workflows/ci.yml)
 
-<img src="https://www.organicfacts.net/wp-content/uploads/2013/12/redcabbage.jpg" width="240px" height="180px"></img>
-##### (Looking contribution for a better icon!)
+A spec-conformant [Cucumber](https://cucumber.io/) runner for Elixir.
 
-A simple addon on top of [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html) which provides compile time translation of `.feature` files to exunit tests. Big thanks to [@meadsteve](https://github.com/meadsteve) and the [White Bread](https://github.com/meadsteve/white-bread) project for a huge head start on this project.
+Cabbage compiles Gherkin `.feature` files into [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html)
+tests at compile time, so non-technical stakeholders read and write the feature files while
+developers maintain ordinary Elixir step definitions. It parses Gherkin with the
+[gherkin fork](https://github.com/tomasz-tomczyk/gherkin) and also ships a message-emitting
+interpreter that is graded against the official Cucumber test kits.
+
+## Conformance
+
+This fork is verified against the upstream Cucumber suites:
+
+| Suite | Score |
+| --- | --- |
+| Cucumber Compatibility Kit (CCK) | **43 / 44** |
+| Cucumber Expressions | **115 / 115** |
+| Tag Expressions | **64 / 64** |
+
+The scoreboards are reproducible locally:
+
+```shell
+MIX_ENV=test mix conformance.cck
+MIX_ENV=test mix conformance.tags
+MIX_ENV=test mix conformance.expressions
+```
+
+These tasks print scoreboards. The hard regression gate (run in CI) is the tagged ExUnit
+suite, which asserts the expected passing-sample sets:
+
+```shell
+mix test --only conformance
+```
+
+## Requirements & dependencies
+
+- **Elixir 1.18+** (CI covers 1.18, 1.19, and 1.20).
+- Uses the **built-in `JSON` module** — no `jason` dependency.
+- The only runtime dependency is the [gherkin fork](https://github.com/tomasz-tomczyk/gherkin)
+  (itself `jason`-free). `ex_doc` is dev-only.
 
 ## Installation
 
-[Available in Hex](https://hex.pm/packages/cabbage), the package can be installed as:
-
-  1. Add `cabbage` to your list of dependencies in `mix.exs`:
+Add `cabbage` to your dependencies in `mix.exs`, pointing at this fork:
 
 ```elixir
 def deps do
-  [{:cabbage, "~> 0.4.0"}]
+  [
+    {:cabbage, github: "tomasz-tomczyk/cabbage", branch: "master"}
+  ]
 end
 ```
 
+> The Hex package and OTP application name remain `:cabbage`; a rename is deferred to a
+> later release so existing dependents keep resolving.
+
 ## Example Usage
 
-By default, feature files are expected inside `test/features`. This can be configured within your application with the following:
+By default, feature files are expected inside `test/features`. This can be configured within
+your application:
 
 ```elixir
 config :cabbage, features: "some/other/path/from/your/project/root"
 ```
 
-Inside `test/features/coffee.feature` you might have something like:
+Inside `test/features/coffee.feature`:
 
 ```gherkin
 Feature: Serve coffee
@@ -44,122 +81,88 @@ Feature: Serve coffee
     Then I should be served a coffee
 ```
 
-To translate this to a simple exunit test, all you need to do is provide the translation of lines to steps in the test. Inside `test/features/coffee_test.exs` (or anywhere you like really).
+Translate each line to a step by `use`-ing `Cabbage.Feature` and providing `defgiven/4`,
+`defwhen/4`, and `defthen/4` step definitions. Inside `test/features/coffee_test.exs`:
 
 ```elixir
 defmodule MyApp.Features.CoffeeTest do
-  # Options, other than file:, are passed directly to `ExUnit`
+  # Options other than `file:` are passed directly to `ExUnit`.
   use Cabbage.Feature, async: false, file: "coffee.feature"
 
-  # `setup_all/1` provides a callback for doing something before the entire suite runs
-  # As below, `setup/1` provides means of doing something prior to each scenario
-  setup do
-    on_exit fn -> # Do something when the scenario is done
-      IO.puts "Scenario completed, cleanup stuff"
-    end
-    %{my_starting: :state, user: %User{}} # Return some beginning state
-  end
-
-  # All `defgiven/4`, `defwhen/4` and `defthen/4` takes a regex, matched data, state and lastly a block
-  defgiven ~r/^there (is|are) (?<number>\d+) coffee(s) left in the machine$/, %{number: number}, %{user: user} do
-    # `{:ok, state}` gets returned from each callback which updates the state or
-    # leaves the state unchanged when something else is returned
-    {:ok, %{machine: Machine.put_coffee(Machine.new, number)}}
-  end
-
-  defgiven ~r/^I have deposited £(?<number>\d+)$/, %{number: number}, %{user: user, machine: machine} do
-    {:ok, %{machine: Machine.deposit(machine, user, number)}} # State is automatically merged so this won't erase `user`
-  end
-
-  # With no matches, the map is empty. Since state is unchanged, its not necessary to return it
-  defwhen ~r/^I press the coffee button$/, _, state do
-    Machine.press_coffee(state.machine) # instead would be some `hound` or `wallaby` dsl
-  end
-
-  # Since state is unchanged, its not necessary to return it
-  defthen ~r/^I should be served a coffee$/, _, state do
-    assert %Coffee{} = Machine.take_drink(state.machine) # Make your `assert`ions in `defthen/4`s
-  end
-end
-```
-
-The resulting compiled test will be logically equivalent to:
-
-```elixir
-defmodule MyApp.Features.CoffeeTest do
-  use ExUnit.Case, async: false
-
+  # `setup/1` runs prior to each scenario; `setup_all/1` runs once for the suite.
   setup do
     on_exit fn ->
       IO.puts "Scenario completed, cleanup stuff"
     end
-    {:ok, %{my_starting: :state, user: %User{}}}
+    %{my_starting: :state, user: %User{}} # Beginning state
   end
 
-  # Each scenario would generate a single test case. Cabbage does NOT add any
-  # tags automatically; add your own with `@moduletag`/`@tag` (or feature-file
-  # `@tags`) if you want to filter scenarios via `mix test --exclude`.
-  test "Buy last coffee", %{my_starting: :state, user: user} do
-    # From the given
-    state = %{user: user, machine: Machine.put_coffee(Machine.new, number)}
-    # From the and
-    state = Map.put(state, :machine, Machine.deposit(machine, user, number))
-    # From the when
+  # `defgiven/4`, `defwhen/4` and `defthen/4` take a regex, the matched data,
+  # the current state, and a block.
+  defgiven ~r/^there (is|are) (?<number>\d+) coffee(s) left in the machine$/, %{number: number}, %{user: user} do
+    # Returning `{:ok, map}` merges into the scenario state; anything else leaves it unchanged.
+    {:ok, %{machine: Machine.put_coffee(Machine.new, number)}}
+  end
+
+  defgiven ~r/^I have deposited £(?<number>\d+)$/, %{number: number}, %{user: user, machine: machine} do
+    {:ok, %{machine: Machine.deposit(machine, user, number)}} # State is merged, so `user` is kept
+  end
+
+  # With no captures, the matched map is empty. State is unchanged here.
+  defwhen ~r/^I press the coffee button$/, _, state do
     Machine.press_coffee(state.machine)
-    # From the then
-    assert %Coffee{} = Machine.take_drink(state.machine)
+  end
+
+  defthen ~r/^I should be served a coffee$/, _, state do
+    assert %Coffee{} = Machine.take_drink(state.machine) # Assert inside `defthen/4`
   end
 end
 ```
 
-This provides the best of both worlds. Feature files for non-technical users, and an actual test file written in Elixir for developers that have to maintain them.
+The compiled test is logically equivalent to a hand-written ExUnit case: each scenario
+becomes one `test`, with state threaded from step to step.
+
+This provides the best of both worlds: feature files for non-technical users, and an actual
+test file written in Elixir for developers who maintain them.
 
 ### Tables & Doc Strings
 
-Using tables and Doc Strings can be done easily, they are provided through the variables under the names `:table` and `:doc_string`. An example can be seen in [test/data_tables_test.exs](test/data_tables_test.exs) and [test/features/data_tables.feature](test/features/data_tables.feature).
+Tables and Doc Strings are provided to step definitions under the `:table` and `:doc_string`
+variables. See the dynamic-data example in
+[test/feature_execution_test.exs](test/feature_execution_test.exs) and
+[test/features/dynamic.feature](test/features/dynamic.feature).
 
 ### Running specific tests
 
-Typically to run an ExUnit test you would do something like `mix test test/some_test.exs:12` and elixir will automatically load  `test/some_test.exs` for you, but only run the test on line `12`. Since the feature files are being translated into ExUnit at compile time, you'll have to specify the `.exs` file and not the `.feature` file to run. The line numbers are printed out as each test runs (at the `:info` level, so you may need to increase your logger config if you dont see anything). An example is like as follows:
-
-    # Runs scenario of test/features/coffee.feature on line 13
-    mix test test/feature_test.exs:13
-
-# Developing
-
-## Using Docker Compose
-
-A `docker-compose.yml` is provided for running the tests in containers.
+Feature files are translated to ExUnit at compile time, so target the `.exs` file (not the
+`.feature` file) when running a single scenario. The line numbers are printed as each test runs.
 
 ```shell
-$ docker-compose up
+# Runs the scenario of test/features/coffee.feature compiled into feature_test.exs at line 13
+mix test test/feature_test.exs:13
 ```
 
-To wipe all `_build` and `deps` you can run:
-```shell
-$ docker-compose down -v
-```
+## Developing
 
-If you want to interactive, using standard `mix` commands, such as updating dependencies:
+Run the test suite and the conformance gates:
 
 ```shell
-$ docker-compose run --rm test deps.update --all
+mix deps.get
+mix test
+mix test --only conformance
 ```
 
-Or, if you want to run a single test, that can be accomplished with:
+A `docker-compose.yml` is also provided for running the tests in containers:
 
 ```shell
-$ docker-compose run --rm cabbage test test/feature_test.exs
+docker-compose up
 ```
 
-# Roadmap
+## Attribution
 
-- [x] Scenarios
-- [x] Scenario Outlines
-- [x] ExUnit Case Templates
-- [x] Data tables
-- [x] Executing specific tests
-- [x] Tags implementation
-- [ ] Background steps
-- [ ] Integration Helpers for Wallaby (separate project?)
-- [ ] Integration Helpers for Hound (separate project?)
+This is a fork of [`cabbage-ex/cabbage`](https://github.com/cabbage-ex/cabbage), originally
+created by Matt Widmann, Steve B, and Max Marcon. Big thanks also to
+[@meadsteve](https://github.com/meadsteve) and the
+[White Bread](https://github.com/meadsteve/white-bread) project for the original head start.
+
+Licensed under the [MIT License](LICENSE).
