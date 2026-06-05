@@ -167,47 +167,15 @@ defmodule Cabbage.Messages do
 
   defp do_run_features(features, registry, hook_registry, run_opts, attach, ids) do
     # 1. Parser-side envelopes per feature, collecting pickles in document order.
-    {parser_envelopes, pickles, ids} =
-      Enum.reduce(features, {[], [], ids}, fn {source, opts}, {env_acc, pickle_acc, ids} ->
-        uri = Keyword.get(opts, :uri, "")
-        format = Keyword.get(opts, :format, :plain)
-        parse_opts = [uri: uri, markdown: format == :markdown]
-        document = Gherkin.parse!(source, parse_opts)
-        feature_pickles = Gherkin.pickles(source, parse_opts)
-
-        envelopes = [
-          Message.source_envelope(uri, source, format),
-          Message.gherkin_document_envelope(document)
-          | Enum.map(feature_pickles, &Message.pickle_envelope/1)
-        ]
-
-        {env_acc ++ envelopes, pickle_acc ++ feature_pickles, ids}
-      end)
+    {parser_envelopes, pickles, ids} = parser_envelopes(features, ids)
 
     # `--order reverse`: the planning (testCase) and execution order both reverse, while the
     # parser-side envelopes keep document order.
     pickles = if run_opts[:order] == :reverse, do: Enum.reverse(pickles), else: pickles
 
-    # 2. Registration-side envelopes, in cucumber-messages registration order:
-    #   parameterType* -> undefinedParameterType* -> hook(BEFORE) -> stepDefinition* -> hook(AFTER)
-    #
-    # 2a. Custom parameterType messages (each consumes an id), then undefinedParameterType
-    # messages (no id). Built-in types are not surfaced; undefined `{type}` defs emit no
-    # stepDefinition but do emit an undefinedParameterType.
-    {parameter_type_envelopes, ids} = parameter_type_envelopes(registry, ids)
-    undefined_parameter_type_envelopes = undefined_parameter_type_envelopes(registry)
-
-    # 2b. Hook definition envelopes (one per registered hook) — assigned ids the test steps
-    # and testRunHook* envelopes reference back. The reference emits the registration section
-    # in source order (before/beforeAll hooks, then step defs, then after/afterAll hooks), so
-    # we split the hook defs into a "before" block (emitted ahead of step defs) and an "after"
-    # block (after them). The normalizer sorts each contiguous block by type+tag expression.
-    {before_hook_defs, after_hook_defs, hook_ids, ids} =
-      hook_definition_envelopes(hook_registry, ids)
-
-    # 2c. StepDefinition envelopes (one per registered definition, registration order).
-    {step_def_envelopes, def_ids} = step_definition_envelopes(registry, ids)
-    ids = def_ids.ids
+    # 2. Registration-side envelopes (parameterType / undefinedParameterType / hook / step
+    # definition) plus the id-lookup maps later steps reference back.
+    {reg, ids} = registration_envelopes(registry, hook_registry, ids)
 
     # 3. TestRunStarted.
     {test_run_started_id, ids} = Ids.next(ids)
@@ -216,56 +184,121 @@ defmodule Cabbage.Messages do
     # 4. BeforeAll global hooks, in registration order, right after testRunStarted. A failed
     # BeforeAll fails the run and suppresses all test-case execution (cleanup hooks still run).
     {before_all_envelopes, before_all_ok?, ids} =
-      run_global_hooks(:before_test_run, hook_registry, hook_ids, test_run_started_id, attach, ids)
+      run_global_hooks(:before_test_run, hook_registry, reg.hook_ids, test_run_started_id, attach, ids)
 
     # 5/6. When a BeforeAll failed, the run is aborted: no TestCase is planned or executed
     # (the pickles are still emitted in the parser section, but they never become test cases).
     # Otherwise plan every pickle into a TestCase — weaving in applicable before/after scenario
     # hooks as `hookId` test steps — then execute each.
-    retry_config = %{
-      max: Keyword.get(run_opts, :retry, 0),
-      tag_expression: Keyword.get(run_opts, :retry_tag_expression)
-    }
-
     {test_case_envelopes, execution_envelopes, final_failed?, ids} =
-      if before_all_ok? do
-        {test_cases, ids} =
-          Enum.map_reduce(pickles, ids, fn pickle, ids ->
-            plan_test_case(pickle, registry, def_ids.by_definition, hook_registry, hook_ids, test_run_started_id, ids)
-          end)
-
-        {execution_and_flags, ids} =
-          Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
-            {envelopes, final_failed?, ids} = execute_test_case(test_case, retry_config, attach, ids)
-            {[{envelopes, final_failed?}], ids}
-          end)
-
-        execution = Enum.flat_map(execution_and_flags, fn {envelopes, _} -> envelopes end)
-        any_failed? = Enum.any?(execution_and_flags, fn {_, failed?} -> failed? end)
-        {Enum.map(test_cases, & &1.envelope), execution, any_failed?, ids}
-      else
-        {[], [], false, ids}
-      end
+      plan_and_execute(pickles, before_all_ok?, registry, hook_registry, reg, run_opts, test_run_started_id, attach, ids)
 
     # 7. AfterAll global hooks, in *reverse* registration order, before testRunFinished.
     {after_all_envelopes, after_all_ok?, _ids} =
-      run_global_hooks(:after_test_run, hook_registry, hook_ids, test_run_started_id, attach, ids)
+      run_global_hooks(:after_test_run, hook_registry, reg.hook_ids, test_run_started_id, attach, ids)
 
-    success =
-      before_all_ok? and after_all_ok? and not final_failed?
+    success = before_all_ok? and after_all_ok? and not final_failed?
 
+    # Final envelope-assembly manifest. The ORDER of this `++` chain is the cucumber-messages
+    # ordering contract; every section above is gathered so this stays a readable list.
     parser_envelopes ++
-      parameter_type_envelopes ++
-      undefined_parameter_type_envelopes ++
-      before_hook_defs ++
-      step_def_envelopes ++
-      after_hook_defs ++
+      reg.parameter_type_envelopes ++
+      reg.undefined_parameter_type_envelopes ++
+      reg.before_hook_defs ++
+      reg.step_def_envelopes ++
+      reg.after_hook_defs ++
       [test_run_started] ++
       before_all_envelopes ++
       test_case_envelopes ++
       execution_envelopes ++
       after_all_envelopes ++
       [test_run_finished_envelope(test_run_started_id, success)]
+  end
+
+  # Step 1: per-feature Source/GherkinDocument/Pickle envelopes (document order), collecting
+  # every pickle (also in document order) and threading ids.
+  defp parser_envelopes(features, ids) do
+    Enum.reduce(features, {[], [], ids}, fn {source, opts}, {env_acc, pickle_acc, ids} ->
+      uri = Keyword.get(opts, :uri, "")
+      format = Keyword.get(opts, :format, :plain)
+      parse_opts = [uri: uri, markdown: format == :markdown]
+      document = Gherkin.parse!(source, parse_opts)
+      feature_pickles = Gherkin.pickles(source, parse_opts)
+
+      envelopes = [
+        Message.source_envelope(uri, source, format),
+        Message.gherkin_document_envelope(document)
+        | Enum.map(feature_pickles, &Message.pickle_envelope/1)
+      ]
+
+      {env_acc ++ envelopes, pickle_acc ++ feature_pickles, ids}
+    end)
+  end
+
+  # Step 2: the registration-side envelopes, in cucumber-messages registration order:
+  #   parameterType* -> undefinedParameterType* -> hook(BEFORE) -> stepDefinition* -> hook(AFTER)
+  #
+  # Returns a map of the (already-ordered) envelope sections plus the two id-lookup maps the
+  # later planning step needs (`hook_ids` and `by_definition`), and the threaded ids.
+  #
+  #   * Custom parameterType messages each consume an id; undefinedParameterType messages
+  #     (emitted for `{type}` defs that referenced an unregistered type) carry none.
+  #   * Hook definition envelopes are split into a "before" block (before/beforeAll hooks,
+  #     emitted ahead of step defs) and an "after" block (after/afterAll hooks, after them),
+  #     mirroring the reference's source-order registration section. The normalizer sorts
+  #     each contiguous block by type+tag expression.
+  #   * StepDefinition envelopes are one per registered (non-undefined) definition, in
+  #     registration order.
+  defp registration_envelopes(registry, hook_registry, ids) do
+    {parameter_type_envelopes, ids} = parameter_type_envelopes(registry, ids)
+    undefined_parameter_type_envelopes = undefined_parameter_type_envelopes(registry)
+
+    {before_hook_defs, after_hook_defs, hook_ids, ids} =
+      hook_definition_envelopes(hook_registry, ids)
+
+    {step_def_envelopes, def_ids} = step_definition_envelopes(registry, ids)
+
+    reg = %{
+      parameter_type_envelopes: parameter_type_envelopes,
+      undefined_parameter_type_envelopes: undefined_parameter_type_envelopes,
+      before_hook_defs: before_hook_defs,
+      after_hook_defs: after_hook_defs,
+      step_def_envelopes: step_def_envelopes,
+      hook_ids: hook_ids,
+      by_definition: def_ids.by_definition
+    }
+
+    {reg, def_ids.ids}
+  end
+
+  # Steps 5/6: plan every pickle into a TestCase, then execute each. When a BeforeAll failed
+  # the run is aborted, so nothing is planned or executed (the pickles still appear in the
+  # parser section but never become test cases). Returns the testCase envelopes, the execution
+  # envelopes, whether the *final* attempt of any test case was unsuccessful, and threaded ids.
+  defp plan_and_execute(_pickles, false, _registry, _hook_registry, _reg, _run_opts, _trs_id, _attach, ids) do
+    {[], [], false, ids}
+  end
+
+  defp plan_and_execute(pickles, true, registry, hook_registry, reg, run_opts, test_run_started_id, attach, ids) do
+    retry_config = %{
+      max: Keyword.get(run_opts, :retry, 0),
+      tag_expression: Keyword.get(run_opts, :retry_tag_expression)
+    }
+
+    {test_cases, ids} =
+      Enum.map_reduce(pickles, ids, fn pickle, ids ->
+        plan_test_case(pickle, registry, reg.by_definition, hook_registry, reg.hook_ids, test_run_started_id, ids)
+      end)
+
+    {execution_and_flags, ids} =
+      Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
+        {envelopes, final_failed?, ids} = execute_test_case(test_case, retry_config, attach, ids)
+        {[{envelopes, final_failed?}], ids}
+      end)
+
+    execution = Enum.flat_map(execution_and_flags, fn {envelopes, _} -> envelopes end)
+    any_failed? = Enum.any?(execution_and_flags, fn {_, failed?} -> failed? end)
+    {Enum.map(test_cases, & &1.envelope), execution, any_failed?, ids}
   end
 
   @doc "Serialize an envelope list to NDJSON using the gherkin key-sorted serializer."
@@ -612,16 +645,7 @@ defmodule Cabbage.Messages do
       attach: attach
     }
 
-    acc =
-      Enum.reduce(test_case.before_hooks ++ test_case.steps, acc0, fn planned, acc ->
-        execute_step(planned, test_case_started_id, acc)
-      end)
-
-    acc =
-      Enum.reduce(test_case.after_hooks, acc, fn planned, acc ->
-        fresh = %{acc | failed_ish?: false, intrinsic_skip?: false}
-        execute_step(planned, test_case_started_id, fresh)
-      end)
+    acc = execute_steps(test_case, test_case_started_id, acc0)
 
     failed? = Enum.any?(acc.reported, &(&1 == :failed))
     unsuccessful? = Enum.any?(acc.reported, &(&1 not in [:passed, :skipped]))
@@ -629,6 +653,22 @@ defmodule Cabbage.Messages do
 
     finished = test_case_finished_envelope(test_case_started_id, will_be_retried?, acc.ids)
     {[started] ++ acc.envelopes ++ [finished], failed?, unsuccessful?, acc.ids}
+  end
+
+  # Run every planned step of one attempt through the accumulator. Before hooks and pickle
+  # steps share one skip chain (a failed/skipped earlier one propagates per `execute_step`);
+  # After hooks always run, each in its own fresh chain (a skipped/failing After does not
+  # cascade to later After hooks).
+  defp execute_steps(test_case, test_case_started_id, acc) do
+    acc =
+      Enum.reduce(test_case.before_hooks ++ test_case.steps, acc, fn planned, acc ->
+        execute_step(planned, test_case_started_id, acc)
+      end)
+
+    Enum.reduce(test_case.after_hooks, acc, fn planned, acc ->
+      fresh = %{acc | failed_ish?: false, intrinsic_skip?: false}
+      execute_step(planned, test_case_started_id, fresh)
+    end)
   end
 
   # Execute (or skip) one planned step or hook, returning the updated accumulator.
