@@ -39,9 +39,7 @@ defmodule Mix.Tasks.Conformance.Cck do
   # normal run (its golden asserts a run-level crash, mirroring cucumber-js marking it
   # UNSUPPORTED in its own CCK harness).
   @deferral_reasons %{
-    "test-run-exception" => "asserts a run-level crash, not a normal gradeable run",
-    "hooks-attachment" => "requires attachments (attachments wave)",
-    "global-hooks-attachments" => "requires attachments (attachments wave)"
+    "test-run-exception" => "asserts a run-level crash, not a normal gradeable run"
   }
 
   @impl Mix.Task

@@ -22,11 +22,14 @@ defmodule Cabbage.Conformance.CCKTest do
     parameter-types regular-expression unknown-parameter-type
     hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
     global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
+    attachments examples-tables-attachment hooks-attachment global-hooks-attachments
   )
 
   # Areas blocked on gherkin-parser feature gaps (NOT on the runner):
-  #   * markdown — the Markdown-with-Gherkin dialect (`.feature.md`) is not parsed.
-  # Tracked as gherkin-fork follow-ups; skipped so the suite documents them without failing.
+  #   * markdown — the Markdown-with-Gherkin dialect treats a leading markdown table line as
+  #     the Feature description; our gherkin fork drops it (envelope counts and the 2 `log`
+  #     attachments now match exactly — only `feature.description` diverges). Tracked as a
+  #     gherkin-fork follow-up; the attachments wave confirmed it is the *sole* remaining gap.
   @blocked_on_gherkin ~w(markdown)
 
   for sample <- @passing do

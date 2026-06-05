@@ -27,6 +27,7 @@ defmodule Cabbage.Conformance.CCK.Runner do
     parameter-types regular-expression unknown-parameter-type
     hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
     global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
+    attachments examples-tables-attachment hooks-attachment global-hooks-attachments
   )
 
   @doc "The list of CCK sample areas this harness runs."

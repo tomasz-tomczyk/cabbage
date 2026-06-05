@@ -15,7 +15,10 @@ defmodule Cabbage.Conformance.CCK.Steps do
   steps.
   """
 
-  alias Cabbage.Messages.{HookRegistry, StepRegistry}
+  alias Cabbage.Messages.{Attach, HookRegistry, StepRegistry}
+
+  # Vendored binary attachments live alongside the goldens under data/<sample>/.
+  @data_dir Path.join([__DIR__, "data"])
 
   @doc "The step registry for `sample`, or an empty registry when the sample has no step defs."
   @spec for(String.t()) :: StepRegistry.t()
@@ -156,7 +159,8 @@ defmodule Cabbage.Conformance.CCK.Steps do
       "we use a data table and attach something and then {word}",
       "markdown",
       11,
-      fn [word], _arg ->
+      fn [word], _arg, world ->
+        Attach.log(world, "We are logging some plain text (#{word})")
         if word == "fail", do: raise("You asked me to fail"), else: :ok
       end
     )
@@ -249,6 +253,68 @@ defmodule Cabbage.Conformance.CCK.Steps do
     |> add("{airport} is closed because of a strike", "unknown-parameter-type", 3, fn _args ->
       raise "Should not be called because airport parameter type has not been defined"
     end)
+  end
+
+  # ---- attachment areas (step definitions) -----------------------------------
+
+  def for("attachments") do
+    StepRegistry.new()
+    |> add("the string {string} is attached as {string}", "attachments", 4, fn [text, media_type], _arg, world ->
+      Attach.attach(world, text, media_type)
+    end)
+    |> add("the string {string} is logged", "attachments", 11, fn [text], _arg, world ->
+      Attach.log(world, text)
+    end)
+    |> add("text with ANSI escapes is logged", "attachments", 15, fn _args, _arg, world ->
+      Attach.log(
+        world,
+        "This displays a \e[31mr\e[0m\e[91ma\e[0m\e[33mi\e[0m\e[32mn\e[0m\e[34mb\e[0m\e[95mo\e[0m\e[35mw\e[0m"
+      )
+    end)
+    |> add("the following string is attached as {string}:", "attachments", 21, fn [media_type],
+                                                                                  {:doc_string, text},
+                                                                                  world ->
+      Attach.attach(world, text, media_type)
+    end)
+    |> add("an array with {int} bytes is attached as {string}", "attachments", 28, fn [size, media_type], _arg, world ->
+      bytes = :erlang.list_to_binary(Enum.to_list(0..(size - 1)))
+      Attach.attach(world, {:bytes, bytes}, media_type)
+    end)
+    |> add("a PDF document is attached and renamed", "attachments", 37, fn _args, _arg, world ->
+      Attach.attach(world, {:bytes, binary("attachments", "document.pdf")},
+        media_type: "application/pdf",
+        file_name: "renamed.pdf"
+      )
+    end)
+    |> add("a link to {string} is attached", "attachments", 44, fn [uri], _arg, world ->
+      Attach.link(world, uri)
+    end)
+    |> add("the string {string} is attached as {string} before a failure", "attachments", 48, fn [text, media_type],
+                                                                                                 _arg,
+                                                                                                 world ->
+      Attach.attach(world, text, media_type)
+      raise "whoops"
+    end)
+  end
+
+  def for("examples-tables-attachment") do
+    StepRegistry.new()
+    |> add("a JPEG image is attached", "examples-tables-attachment", 4, fn _args, _arg, world ->
+      Attach.attach(world, {:bytes, binary("examples-tables-attachment", "cucumber.jpeg")}, "image/jpeg")
+    end)
+    |> add("a PNG image is attached", "examples-tables-attachment", 8, fn _args, _arg, world ->
+      Attach.attach(world, {:bytes, binary("examples-tables-attachment", "cucumber.png")}, "image/png")
+    end)
+  end
+
+  def for("hooks-attachment") do
+    StepRegistry.new()
+    |> add("a step passes", "hooks-attachment", 9, fn -> :ok end)
+  end
+
+  def for("global-hooks-attachments") do
+    StepRegistry.new()
+    |> add("a step passes", "global-hooks-attachments", 7, fn -> :ok end)
   end
 
   # ---- hook areas (step definitions) -----------------------------------------
@@ -375,6 +441,28 @@ defmodule Cabbage.Conformance.CCK.Steps do
     |> aftr(fn -> raise "whoops" end, "skipped-failing-hook", 5)
   end
 
+  def hooks_for("hooks-attachment") do
+    svg = binary("hooks-attachment", "cucumber.svg")
+
+    HookRegistry.new()
+    |> before(fn _args, _arg, world -> Attach.attach(world, {:bytes, svg}, "image/svg+xml") end, "hooks-attachment", 4)
+    |> aftr(fn _args, _arg, world -> Attach.attach(world, {:bytes, svg}, "image/svg+xml") end, "hooks-attachment", 12)
+  end
+
+  def hooks_for("global-hooks-attachments") do
+    HookRegistry.new()
+    |> before_all(
+      fn _args, _arg, world -> Attach.attach(world, "Attachment from BeforeAll hook", "text/plain") end,
+      "global-hooks-attachments",
+      3
+    )
+    |> after_all(
+      fn _args, _arg, world -> Attach.attach(world, "Attachment from AfterAll hook", "text/plain") end,
+      "global-hooks-attachments",
+      11
+    )
+  end
+
   def hooks_for(_sample), do: HookRegistry.new()
 
   # ---- helpers ---------------------------------------------------------------
@@ -400,6 +488,9 @@ defmodule Cabbage.Conformance.CCK.Steps do
     uri = "samples/#{sample}/#{sample}.ts"
     HookRegistry.add(registry, type, fun, Keyword.merge([uri: uri, line: line], opts))
   end
+
+  # Read a vendored binary attachment fixture (alongside the sample's golden) as raw bytes.
+  defp binary(sample, file), do: File.read!(Path.join([@data_dir, sample, file]))
 
   # Transpose a list of rows (each a list of cell strings), matching DataTable#transpose.
   defp transpose([]), do: []
