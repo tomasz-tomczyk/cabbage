@@ -47,9 +47,9 @@ defmodule Cabbage.CucumberExpression.TreeRegexp do
   Like `match/2`, but each group also carries its `:start` offset (the byte index of
   the captured substring in `text`, or `nil` when the group did not participate).
 
-  Used by `Cabbage.Messages` to build cucumber-messages `stepMatchArguments`, which
-  require both the matched value and its start position. For ASCII source text the
-  byte offset equals the character offset the cucumber-messages goldens expect.
+  Callers that build cucumber-messages `stepMatchArguments` need both the matched value
+  and its start position. For ASCII source text the byte offset equals the character
+  offset the cucumber-messages goldens expect.
   """
   @spec match_with_index(%TreeRegexp{}, String.t()) :: group() | nil
   def match_with_index(%TreeRegexp{regex: regex, group_builder: gb}, text) do

@@ -111,7 +111,27 @@ defmodule Cabbage.Messages do
   @spec run(String.t(), StepRegistry.t(), keyword()) :: [envelope()]
   def run(feature_source, %StepRegistry{} = registry, opts \\ []) do
     {run_opts, feature_opts} = Keyword.split(opts, [:hooks, :retry, :retry_tag_expression])
+    validate_feature_opts!(feature_opts)
     run_features([{feature_source, feature_opts}], registry, run_opts)
+  end
+
+  # The per-feature opts `run/3` understands. `:order` is deliberately NOT here: it is a
+  # whole-run concern (it reverses planning/execution across every feature) and is read only
+  # by `run_features/2`, never per feature. Passing it (or any other unknown key) to `run/3`
+  # would silently do nothing, so we fail fast instead.
+  @feature_opt_keys [:uri, :format]
+
+  defp validate_feature_opts!(opts) do
+    case Keyword.keys(opts) -- @feature_opt_keys do
+      [] ->
+        :ok
+
+      unknown ->
+        raise ArgumentError,
+              "unknown option(s) #{inspect(unknown)} passed to Cabbage.Messages.run/3; " <>
+                "valid per-feature options are #{inspect(@feature_opt_keys)}. " <>
+                "(:order is a run-wide option read only by run_features/2.)"
+    end
   end
 
   @doc """
@@ -806,8 +826,19 @@ defmodule Cabbage.Messages do
   end
 
   # cucumber-js generates one snippet per plausible parameter-type interpretation of the
-  # undefined step text. Normalization strips snippet `code`/`language`, so only the COUNT
-  # is compared: a numeric token yields both an {int} and a {float} snippet (2); otherwise 1.
+  # undefined step text. Normalization strips snippet `code`/`language` (see
+  # `Cabbage.Messages.Normalizer`), so only the snippet COUNT is compared against the golden.
+  #
+  # This count is INTENTIONALLY corpus-fitted to the CCK `undefined`/`pending`/`skipped`
+  # samples rather than derived: those samples only ever exercise the two cases below, so a
+  # heuristic is exact for the goldens we grade against and avoids reimplementing
+  # cucumber-js's full snippet generator. A digit anywhere in the text yields two snippets
+  # (the `{int}` and `{float}` interpretations); any other text yields one.
+  #
+  # What would break this: an undefined step whose text supports a *different* number of
+  # parameter-type interpretations than 1-or-2 (e.g. multiple numeric tokens, or a custom
+  # parameter type whose regex matches part of the text). A CCK sample like that would force
+  # deriving the count from the enumerated interpretations instead of from this digit check.
   defp suggestion_snippets(text) do
     count = if Regex.match?(~r/\d/, text), do: 2, else: 1
     for _ <- 1..count, do: %{"code" => "", "language" => "elixir"}

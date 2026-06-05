@@ -48,9 +48,11 @@ defmodule Cabbage.Messages.Normalizer do
 
   # ---- 3. reorder testRunHook envelopes --------------------------------------
 
-  # Any testRunHookStarted/Finished before the first testCaseStarted moves to right after
-  # testRunStarted (preserving their relative order). With no hooks emitted yet this is a
-  # no-op, but it is implemented so the rule is correct as hooks land in the next wave.
+  # Any testRunHookStarted/Finished occurring before the first testCaseStarted is moved to
+  # immediately after testRunStarted, preserving their relative order. This is the
+  # BeforeAll-hook block: cabbage already emits it right after testRunStarted, but some
+  # reference goldens place those envelopes elsewhere in the pre-test-case prefix, so this
+  # canonicalizes both streams to the same position before the order-sensitive comparison.
   defp reorder_envelopes(envelopes) do
     first_case_index =
       Enum.find_index(envelopes, &envelope?(&1, "testCaseStarted"))

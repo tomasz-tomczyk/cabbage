@@ -205,4 +205,41 @@ defmodule Cabbage.MessagesResultTest do
                ["AMBIGUOUS", "SKIPPED", "SKIPPED"]
     end
   end
+
+  describe "run/3 option validation" do
+    setup do
+      registry = StepRegistry.new() |> StepRegistry.add("a step", fn -> :ok end)
+
+      feature = """
+      Feature: F
+        Scenario: S
+          Given a step
+      """
+
+      %{registry: registry, feature: feature}
+    end
+
+    test "accepts the per-feature options :uri and :format", %{
+      registry: registry,
+      feature: feature
+    } do
+      assert statuses(Messages.run(feature, registry, uri: "f.feature", format: :plain)) ==
+               ["PASSED"]
+    end
+
+    test "raises on :order (a run-wide option that run/3 cannot honour)", %{
+      registry: registry,
+      feature: feature
+    } do
+      assert_raise ArgumentError, ~r/unknown option.*:order.*run_features\/2/s, fn ->
+        Messages.run(feature, registry, order: :reverse)
+      end
+    end
+
+    test "raises on any other unknown option", %{registry: registry, feature: feature} do
+      assert_raise ArgumentError, ~r/unknown option.*:bogus/, fn ->
+        Messages.run(feature, registry, bogus: true)
+      end
+    end
+  end
 end
