@@ -59,8 +59,17 @@ defmodule Cabbage.Messages do
   ## Status / extension notes
 
   Run-structure envelopes are assembled here; Source/GherkinDocument/Pickle and NDJSON
-  serialization are reused from `Gherkin.Message`. Hooks, attachments, parameter-type and
-  retry envelopes are *not* emitted yet.
+  serialization are reused from `Gherkin.Message`. Hooks, attachments and parameter-type
+  envelopes are emitted; retry envelopes are *not* emitted yet.
+
+  ## Attachments
+
+  A step or hook body attaches data by calling `Cabbage.Messages.Attach.attach/3` (or
+  `log/2` / `link/2`) with its `world`. The runner threads a per-run collector through the
+  world under the reserved `:__attach__` key, drains it after each step/hook, and emits an
+  `attachment` envelope per attachment *between* that step's `testStepStarted` and
+  `testStepFinished` (or a global hook's `testRunHookStarted`/`testRunHookFinished`). The
+  drain happens even when the body raised, so a body may attach *then* fail.
 
   Ambiguity (cabbage-ex/cabbage#88) is detected here via the match count. It is **not**
   surfaced in the compile-time `Cabbage.Feature` runner: that path's
@@ -70,7 +79,7 @@ defmodule Cabbage.Messages do
   dedicated change rather than this result-semantics wave.
   """
 
-  alias Cabbage.Messages.{HookRegistry, Ids, Matcher, StepRegistry}
+  alias Cabbage.Messages.{Attach, HookRegistry, Ids, Matcher, StepRegistry}
   alias Gherkin.Message
 
   @type envelope :: map()
@@ -109,6 +118,19 @@ defmodule Cabbage.Messages do
     hook_registry = Keyword.get(run_opts, :hooks) || HookRegistry.new()
     ids = Ids.new()
 
+    # Per-run attachment collector: step/hook bodies push attachments onto it via the
+    # reserved `:__attach__` world key; the runner drains it after each step/hook and emits
+    # the resulting `attachment` envelopes. One process owned by this run; stopped at the end.
+    {:ok, attach} = Attach.start_link()
+
+    try do
+      do_run_features(features, registry, hook_registry, run_opts, attach, ids)
+    after
+      Attach.stop(attach)
+    end
+  end
+
+  defp do_run_features(features, registry, hook_registry, run_opts, attach, ids) do
     # 1. Parser-side envelopes per feature, collecting pickles in document order.
     {parser_envelopes, pickles, ids} =
       Enum.reduce(features, {[], [], ids}, fn {source, opts}, {env_acc, pickle_acc, ids} ->
@@ -159,7 +181,7 @@ defmodule Cabbage.Messages do
     # 4. BeforeAll global hooks, in registration order, right after testRunStarted. A failed
     # BeforeAll fails the run and suppresses all test-case execution (cleanup hooks still run).
     {before_all_envelopes, before_all_ok?, ids} =
-      run_global_hooks(:before_test_run, hook_registry, hook_ids, test_run_started_id, ids)
+      run_global_hooks(:before_test_run, hook_registry, hook_ids, test_run_started_id, attach, ids)
 
     # 5/6. When a BeforeAll failed, the run is aborted: no TestCase is planned or executed
     # (the pickles are still emitted in the parser section, but they never become test cases).
@@ -174,7 +196,7 @@ defmodule Cabbage.Messages do
 
         {execution, ids} =
           Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
-            execute_test_case(test_case, ids)
+            execute_test_case(test_case, attach, ids)
           end)
 
         {Enum.map(test_cases, & &1.envelope), execution, ids}
@@ -184,7 +206,7 @@ defmodule Cabbage.Messages do
 
     # 7. AfterAll global hooks, in *reverse* registration order, before testRunFinished.
     {after_all_envelopes, after_all_ok?, _ids} =
-      run_global_hooks(:after_test_run, hook_registry, hook_ids, test_run_started_id, ids)
+      run_global_hooks(:after_test_run, hook_registry, hook_ids, test_run_started_id, attach, ids)
 
     success =
       before_all_ok? and after_all_ok? and run_success?(execution_envelopes)
@@ -290,7 +312,7 @@ defmodule Cabbage.Messages do
   # per hook. BeforeAll runs in registration order; AfterAll in *reverse*. Every hook runs
   # even if an earlier one failed (cleanup semantics); the boolean reports whether all
   # passed-or-skipped, which feeds testRunFinished.success.
-  defp run_global_hooks(type, hook_registry, hook_ids, test_run_started_id, ids) do
+  defp run_global_hooks(type, hook_registry, hook_ids, test_run_started_id, attach, ids) do
     hooks =
       hook_registry
       |> HookRegistry.global_hooks()
@@ -300,15 +322,21 @@ defmodule Cabbage.Messages do
 
     {envelopes, {all_ok?, ids}} =
       Enum.flat_map_reduce(hooks, {true, ids}, fn hook, {all_ok?, ids} ->
-        {status, _world} = run_hook(hook, [], %{})
-        {pair, ids} = test_run_hook_envelopes(test_run_started_id, hook_ids[hook], status, ids)
-        {pair, {all_ok? and hook_success?(status), ids}}
+        {status, _world} = run_hook(hook, [], world_with_attach(%{}, attach))
+        attachments = Attach.drain(attach)
+
+        {envelopes, ids} =
+          test_run_hook_envelopes(test_run_started_id, hook_ids[hook], status, attachments, ids)
+
+        {envelopes, {all_ok? and hook_success?(status), ids}}
       end)
 
     {envelopes, all_ok?, ids}
   end
 
-  defp test_run_hook_envelopes(test_run_started_id, hook_id, status, ids) do
+  # A global hook's testRunHookStarted, then any attachments emitted while it ran, then its
+  # testRunHookFinished — mirroring the scenario-step ordering for `attachment` envelopes.
+  defp test_run_hook_envelopes(test_run_started_id, hook_id, status, attachments, ids) do
     {started_id, ids} = Ids.next(ids)
 
     started = %{
@@ -320,6 +348,9 @@ defmodule Cabbage.Messages do
       }
     }
 
+    {attachment_envelopes, ids} =
+      attachment_envelopes(attachments, %{"testRunStartedId" => test_run_started_id}, ids)
+
     finished = %{
       "testRunHookFinished" => %{
         "testRunHookStartedId" => started_id,
@@ -328,7 +359,7 @@ defmodule Cabbage.Messages do
       }
     }
 
-    {[started, finished], ids}
+    {[started] ++ attachment_envelopes ++ [finished], ids}
   end
 
   defp hook_success?({:failed, _type}), do: false
@@ -469,7 +500,7 @@ defmodule Cabbage.Messages do
 
   # ---- TestCase execution ----------------------------------------------------
 
-  defp execute_test_case(test_case, ids) do
+  defp execute_test_case(test_case, attach, ids) do
     {test_case_started_id, ids} = Ids.next(ids)
     started = test_case_started_envelope(test_case_started_id, test_case.id, ids)
 
@@ -486,7 +517,7 @@ defmodule Cabbage.Messages do
     #
     # Before hooks and pickle steps share one skip chain; After hooks always run, each in its
     # own fresh chain (a skipped/failing After does not cascade to later After hooks).
-    acc0 = %{envelopes: [], world: %{}, failed_ish?: false, intrinsic_skip?: false, ids: ids}
+    acc0 = %{envelopes: [], world: %{}, failed_ish?: false, intrinsic_skip?: false, ids: ids, attach: attach}
 
     acc =
       Enum.reduce(test_case.before_hooks ++ test_case.steps, acc0, fn planned, acc ->
@@ -505,8 +536,13 @@ defmodule Cabbage.Messages do
 
   # Execute (or skip) one planned step or hook, returning the updated accumulator.
   defp execute_step(planned, test_case_started_id, acc) do
-    {intrinsic, new_world} = intrinsic_status(planned, acc.world)
+    {intrinsic, new_world} = intrinsic_status(planned, acc.world, acc.attach)
     reported = report_status(intrinsic, acc)
+
+    # Whatever the body attached while running (drained even on a failed/raised step, since
+    # the collector lives outside the body's return value). A *skipped* step never ran, so
+    # the collector holds nothing for it.
+    attachments = Attach.drain(acc.attach)
 
     suggestions =
       if reported == :undefined,
@@ -514,7 +550,7 @@ defmodule Cabbage.Messages do
         else: []
 
     {step_envelopes, ids} =
-      emit_step(planned, test_case_started_id, acc.ids, reported, suggestions)
+      emit_step(planned, test_case_started_id, acc.ids, reported, suggestions, attachments)
 
     %{
       acc
@@ -527,17 +563,22 @@ defmodule Cabbage.Messages do
   end
 
   # The status a hook would have *on its own* — hooks have no match concept, they just run.
-  defp intrinsic_status(%{kind: :hook} = planned, world), do: run_hook(planned.hook, [], world)
+  defp intrinsic_status(%{kind: :hook} = planned, world, attach),
+    do: run_hook(planned.hook, [], world_with_attach(world, attach))
 
   # The status a step would have *on its own*, ignoring prior steps: UNDEFINED when no
   # definition matches, AMBIGUOUS when more than one does, otherwise the run result.
-  defp intrinsic_status(%{kind: :step} = planned_step, world) do
+  defp intrinsic_status(%{kind: :step} = planned_step, world, attach) do
     case planned_step.matches do
       [] -> {:undefined, world}
-      [match] -> run_step(match, planned_step.pickle_step, world)
+      [match] -> run_step(match, planned_step.pickle_step, world_with_attach(world, attach))
       _ambiguous -> {:ambiguous, world}
     end
   end
+
+  # The world a step/hook body sees, carrying the attachment collector pid under the
+  # reserved `:__attach__` key so `Cabbage.Messages.Attach.attach/3` can find it.
+  defp world_with_attach(world, attach), do: Map.put(world, :__attach__, attach)
 
   # Apply the skip-propagation rule to turn an intrinsic status into the reported one.
   # A real (intrinsic) skip earlier cascades to everything; otherwise a prior failed-ish
@@ -622,17 +663,48 @@ defmodule Cabbage.Messages do
   defp step_argument(%{argument: {:doc_string, %{content: content}}}), do: {:doc_string, content}
   defp step_argument(_), do: nil
 
-  defp emit_step(planned_step, test_case_started_id, ids, status, suggestion_snippets) do
+  defp emit_step(planned_step, test_case_started_id, ids, status, suggestion_snippets, attachments) do
     started = test_step_started_envelope(test_case_started_id, planned_step.id, ids)
 
     {suggestion_envelopes, ids} =
       emit_suggestions(planned_step, suggestion_snippets, ids)
 
+    # Attachments emitted by the body sit between testStepStarted and testStepFinished,
+    # carrying this step's testCaseStartedId/testStepId (mirroring fake-cucumber).
+    refs = %{"testCaseStartedId" => test_case_started_id, "testStepId" => planned_step.id}
+    {attachment_envelopes, ids} = attachment_envelopes(attachments, refs, ids)
+
     finished =
       test_step_finished_envelope(test_case_started_id, planned_step.id, status, ids)
 
-    {[started] ++ suggestion_envelopes ++ [finished], ids}
+    {[started] ++ suggestion_envelopes ++ attachment_envelopes ++ [finished], ids}
   end
+
+  # Build one `attachment` envelope per drained attachment, in push order. `refs` carries
+  # the id keys to attach (`testCaseStartedId`/`testStepId` for scenario steps, or
+  # `testRunStartedId` for global hooks); all are dropped by the normalizer.
+  defp attachment_envelopes(attachments, refs, ids) do
+    # An `attachment` envelope carries no `id` (only a dropped timestamp), so it does not
+    # consume an id — `ids` threads through unchanged.
+    {Enum.map(attachments, fn attachment -> attachment_envelope(attachment, refs, ids) end), ids}
+  end
+
+  defp attachment_envelope(attachment, refs, ids) do
+    inner =
+      refs
+      |> Map.merge(%{
+        "body" => attachment.body,
+        "contentEncoding" => content_encoding_string(attachment.content_encoding),
+        "mediaType" => attachment.media_type,
+        "timestamp" => timestamp(Ids.tick(ids))
+      })
+      |> maybe_put("fileName", Map.get(attachment, :file_name))
+
+    %{"attachment" => inner}
+  end
+
+  defp content_encoding_string(:identity), do: "IDENTITY"
+  defp content_encoding_string(:base64), do: "BASE64"
 
   defp emit_suggestions(_planned_step, [], ids), do: {[], ids}
 
