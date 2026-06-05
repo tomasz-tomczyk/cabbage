@@ -6,7 +6,8 @@ defmodule Cabbage.Conformance.CCK.Runner do
   A sample is described by `sample_spec/1`: the feature file(s) (with their `samples/...`
   uris and media format) and the `Cabbage.Conformance.CCK.Steps` registry to run them
   against. `multiple-features-reversed` additionally reverses pickle execution order
-  (the upstream `--order reverse` argument).
+  (the upstream `--order reverse` argument). The `retry*` areas carry a `--retry N`
+  argument (in `<area>.arguments.txt`) that is parsed and threaded as `:retry`.
 
   `compare/1` returns `{:ok, count}` on a match or `{:error, diff}` describing the first
   divergence, so the scoreboard can print actionable per-sample failures.
@@ -28,6 +29,7 @@ defmodule Cabbage.Conformance.CCK.Runner do
     hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
     global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
     attachments examples-tables-attachment hooks-attachment global-hooks-attachments
+    retry retry-ambiguous retry-pending retry-undefined
   )
 
   @doc "The list of CCK sample areas this harness runs."
@@ -56,13 +58,14 @@ defmodule Cabbage.Conformance.CCK.Runner do
   @doc "The actual envelope stream `Cabbage.Messages` produces for `sample` (un-normalized)."
   @spec run(String.t()) :: [map()]
   def run(sample) do
-    %{features: features, reverse: reverse?} = sample_spec(sample)
+    %{features: features, reverse: reverse?, retry: retry} = sample_spec(sample)
     registry = Steps.for(sample)
     hooks = Steps.hooks_for(sample)
 
     run_opts =
       [hooks: hooks]
       |> then(fn opts -> if reverse?, do: [{:order, :reverse} | opts], else: opts end)
+      |> then(fn opts -> if retry > 0, do: [{:retry, retry} | opts], else: opts end)
 
     Messages.run_features(features, registry, run_opts)
   end
@@ -81,7 +84,26 @@ defmodule Cabbage.Conformance.CCK.Runner do
   # ---- sample specs ----------------------------------------------------------
 
   defp sample_spec(sample) do
-    %{features: feature_files(sample), reverse: sample == "multiple-features-reversed"}
+    %{
+      features: feature_files(sample),
+      reverse: sample == "multiple-features-reversed",
+      retry: retry_count(sample)
+    }
+  end
+
+  # The `--retry N` count from the sample's `<area>.arguments.txt` (0 when absent).
+  defp retry_count(sample) do
+    case Path.wildcard(Path.join([@data_dir, sample, "*.arguments.txt"])) do
+      [path] -> parse_retry(File.read!(path))
+      [] -> 0
+    end
+  end
+
+  defp parse_retry(contents) do
+    case Regex.run(~r/--retry\s+(\d+)/, contents) do
+      [_, n] -> String.to_integer(n)
+      nil -> 0
+    end
   end
 
   # A sample's feature inputs as {source, opts}, in document order, with `samples/...` uris.

@@ -23,6 +23,7 @@ defmodule Cabbage.Conformance.CCKTest do
     hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
     global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
     attachments examples-tables-attachment hooks-attachment global-hooks-attachments
+    retry retry-ambiguous retry-pending retry-undefined
   )
 
   # Areas blocked on gherkin-parser feature gaps (NOT on the runner):

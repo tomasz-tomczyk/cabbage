@@ -59,8 +59,18 @@ defmodule Cabbage.Messages do
   ## Status / extension notes
 
   Run-structure envelopes are assembled here; Source/GherkinDocument/Pickle and NDJSON
-  serialization are reused from `Gherkin.Message`. Hooks, attachments and parameter-type
-  envelopes are emitted; retry envelopes are *not* emitted yet.
+  serialization are reused from `Gherkin.Message`. Hooks, attachments, parameter-type, and
+  retry (`:retry`/`:retry_tag_expression`) envelopes are all emitted.
+
+  ## Retry
+
+  With `:retry N`, a test case whose attempt FAILS is re-run up to `N` additional times
+  (cucumber-js retry semantics, CCK `retry*` areas). Each attempt emits its own
+  `testCaseStarted` (same `testCaseId`, incrementing 0-based `attempt`) and a
+  `testCaseFinished` whose `willBeRetried` is `true` on every non-final failed attempt.
+  Only a FAILED outcome retries — `AMBIGUOUS`/`PENDING`/`UNDEFINED` will not pass however
+  many times they are attempted, so they run exactly once. `:retry_tag_expression` (a
+  `Cabbage.TagExpression` AST) limits retry to test cases whose pickle tags match.
 
   ## Attachments
 
@@ -92,12 +102,15 @@ defmodule Cabbage.Messages do
     * `:uri` — the source uri embedded in Source/GherkinDocument/Pickle (default `""`);
     * `:format` — `:plain` (default) or `:markdown` for the Source media type;
     * `:hooks` — a `Cabbage.Messages.HookRegistry` of before/after-scenario and
-      BeforeAll/AfterAll hooks (default: no hooks).
+      BeforeAll/AfterAll hooks (default: no hooks);
+    * `:retry` — the maximum number of *additional* attempts a FAILED test case may be
+      re-run (default `0`, i.e. no retry; `--retry N` in the CCK arguments);
+    * `:retry_tag_expression` — an optional `Cabbage.TagExpression` AST; when set, only
+      test cases whose pickle tags match it are eligible for retry (default: all cases).
   """
   @spec run(String.t(), StepRegistry.t(), keyword()) :: [envelope()]
   def run(feature_source, %StepRegistry{} = registry, opts \\ []) do
-    {hooks, feature_opts} = Keyword.pop(opts, :hooks)
-    run_opts = if hooks, do: [hooks: hooks], else: []
+    {run_opts, feature_opts} = Keyword.split(opts, [:hooks, :retry, :retry_tag_expression])
     run_features([{feature_source, feature_opts}], registry, run_opts)
   end
 
@@ -105,8 +118,10 @@ defmodule Cabbage.Messages do
   Run several features as one test run.
 
   `features` is a list of `{feature_source, opts}` (same per-feature opts as `run/3`,
-  i.e. `:uri`/`:format`). `run_opts` may carry `:order` (`:reverse`) and `:hooks` (a
-  `Cabbage.Messages.HookRegistry`). The parser-side envelopes are emitted per feature
+  i.e. `:uri`/`:format`). `run_opts` may carry `:order` (`:reverse`), `:hooks` (a
+  `Cabbage.Messages.HookRegistry`), `:retry` (max additional attempts for a FAILED case),
+  and `:retry_tag_expression` (a `Cabbage.TagExpression` AST limiting which cases retry).
+  The parser-side envelopes are emitted per feature
   (Source, GherkinDocument, Pickles), then a single set of Hook / StepDefinition / TestRun*
   / TestCase* / execution envelopes spans all pickles — matching the `multiple-features`
   golden.
@@ -187,21 +202,29 @@ defmodule Cabbage.Messages do
     # (the pickles are still emitted in the parser section, but they never become test cases).
     # Otherwise plan every pickle into a TestCase — weaving in applicable before/after scenario
     # hooks as `hookId` test steps — then execute each.
-    {test_case_envelopes, execution_envelopes, ids} =
+    retry_config = %{
+      max: Keyword.get(run_opts, :retry, 0),
+      tag_expression: Keyword.get(run_opts, :retry_tag_expression)
+    }
+
+    {test_case_envelopes, execution_envelopes, final_failed?, ids} =
       if before_all_ok? do
         {test_cases, ids} =
           Enum.map_reduce(pickles, ids, fn pickle, ids ->
             plan_test_case(pickle, registry, def_ids.by_definition, hook_registry, hook_ids, test_run_started_id, ids)
           end)
 
-        {execution, ids} =
+        {execution_and_flags, ids} =
           Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
-            execute_test_case(test_case, attach, ids)
+            {envelopes, final_failed?, ids} = execute_test_case(test_case, retry_config, attach, ids)
+            {[{envelopes, final_failed?}], ids}
           end)
 
-        {Enum.map(test_cases, & &1.envelope), execution, ids}
+        execution = Enum.flat_map(execution_and_flags, fn {envelopes, _} -> envelopes end)
+        any_failed? = Enum.any?(execution_and_flags, fn {_, failed?} -> failed? end)
+        {Enum.map(test_cases, & &1.envelope), execution, any_failed?, ids}
       else
-        {[], [], ids}
+        {[], [], false, ids}
       end
 
     # 7. AfterAll global hooks, in *reverse* registration order, before testRunFinished.
@@ -209,7 +232,7 @@ defmodule Cabbage.Messages do
       run_global_hooks(:after_test_run, hook_registry, hook_ids, test_run_started_id, attach, ids)
 
     success =
-      before_all_ok? and after_all_ok? and run_success?(execution_envelopes)
+      before_all_ok? and after_all_ok? and not final_failed?
 
     parser_envelopes ++
       parameter_type_envelopes ++
@@ -437,6 +460,7 @@ defmodule Cabbage.Messages do
 
     {%{
        id: test_case_id,
+       tags: pickle_tags,
        before_hooks: before_planned,
        steps: step_planned,
        after_hooks: after_planned,
@@ -500,9 +524,48 @@ defmodule Cabbage.Messages do
 
   # ---- TestCase execution ----------------------------------------------------
 
-  defp execute_test_case(test_case, attach, ids) do
+  # Execute a test case, re-running it as long as it FAILS and there are retry attempts
+  # left (cucumber-js retry semantics, CCK `retry*` areas). Each attempt emits its own
+  # `testCaseStarted` (same `testCaseId`, incrementing 0-based `attempt`), re-emits the step
+  # envelopes, and a `testCaseFinished` whose `willBeRetried` is `true` for every non-final
+  # failed attempt. Only a FAILED case retries — AMBIGUOUS/PENDING/UNDEFINED never pass on a
+  # re-run, so they are attempted exactly once. Returns the accumulated envelopes, whether
+  # the *final* attempt was unsuccessful (any non-PASSED/SKIPPED step → feeds run success),
+  # and the threaded ids.
+  defp execute_test_case(test_case, retry_config, attach, ids) do
+    max_retries = if retry_eligible?(test_case, retry_config), do: retry_config.max, else: 0
+    run_attempts(test_case, attach, ids, 0, max_retries, [])
+  end
+
+  # A test case is retry-eligible when retries are configured and (if a tag expression was
+  # given) the pickle's tags match it. The status-based gate (only FAILED retries) is applied
+  # per attempt below.
+  defp retry_eligible?(_test_case, %{max: max}) when max <= 0, do: false
+  defp retry_eligible?(_test_case, %{tag_expression: nil}), do: true
+
+  defp retry_eligible?(test_case, %{tag_expression: expr}),
+    do: Cabbage.TagExpression.evaluate(expr, test_case.tags)
+
+  defp run_attempts(test_case, attach, ids, attempt, max_retries, acc_envelopes) do
+    {envelopes, failed?, unsuccessful?, ids} =
+      run_attempt(test_case, attach, ids, attempt, attempt < max_retries)
+
+    acc_envelopes = acc_envelopes ++ envelopes
+
+    if failed? and attempt < max_retries do
+      run_attempts(test_case, attach, ids, attempt + 1, max_retries, acc_envelopes)
+    else
+      {acc_envelopes, unsuccessful?, ids}
+    end
+  end
+
+  # Run one attempt of a test case. `will_retry?` is whether this attempt *would* be retried
+  # if it fails (used directly as `willBeRetried` since the loop only continues on a failure).
+  # Returns `{envelopes, failed?, unsuccessful?, ids}` where `failed?` means a FAILED step
+  # occurred (retry trigger) and `unsuccessful?` means any non-PASSED/SKIPPED step occurred.
+  defp run_attempt(test_case, attach, ids, attempt, will_retry?) do
     {test_case_started_id, ids} = Ids.next(ids)
-    started = test_case_started_envelope(test_case_started_id, test_case.id, ids)
+    started = test_case_started_envelope(test_case_started_id, test_case.id, attempt, ids)
 
     # Thread two skip-propagation flags across the scenario's Before hooks + steps
     # (cucumber-js semantics, see the CCK `failedish-combinations` and `hooks-skipped`
@@ -516,8 +579,18 @@ defmodule Cabbage.Messages do
     #                        to *every* later step in this chain, even undefined/ambiguous ones.
     #
     # Before hooks and pickle steps share one skip chain; After hooks always run, each in its
-    # own fresh chain (a skipped/failing After does not cascade to later After hooks).
-    acc0 = %{envelopes: [], world: %{}, failed_ish?: false, intrinsic_skip?: false, ids: ids, attach: attach}
+    # own fresh chain (a skipped/failing After does not cascade to later After hooks). The
+    # `attach` collector is drained per step, so each attempt starts with a clean slate — no
+    # attachment leaks from a prior attempt.
+    acc0 = %{
+      envelopes: [],
+      world: %{},
+      failed_ish?: false,
+      intrinsic_skip?: false,
+      reported: [],
+      ids: ids,
+      attach: attach
+    }
 
     acc =
       Enum.reduce(test_case.before_hooks ++ test_case.steps, acc0, fn planned, acc ->
@@ -530,8 +603,12 @@ defmodule Cabbage.Messages do
         execute_step(planned, test_case_started_id, fresh)
       end)
 
-    finished = test_case_finished_envelope(test_case_started_id, acc.ids)
-    {[started] ++ acc.envelopes ++ [finished], acc.ids}
+    failed? = Enum.any?(acc.reported, &(&1 == :failed))
+    unsuccessful? = Enum.any?(acc.reported, &(&1 not in [:passed, :skipped]))
+    will_be_retried? = failed? and will_retry?
+
+    finished = test_case_finished_envelope(test_case_started_id, will_be_retried?, acc.ids)
+    {[started] ++ acc.envelopes ++ [finished], failed?, unsuccessful?, acc.ids}
   end
 
   # Execute (or skip) one planned step or hook, returning the updated accumulator.
@@ -557,10 +634,16 @@ defmodule Cabbage.Messages do
       | envelopes: acc.envelopes ++ step_envelopes,
         world: new_world,
         ids: ids,
+        reported: acc.reported ++ [bare_status(reported)],
         failed_ish?: acc.failed_ish? or reported != :passed,
         intrinsic_skip?: acc.intrinsic_skip? or intrinsic_skip?(intrinsic)
     }
   end
+
+  # The status atom without its (optional) exception-type tuple, for the retry decision and
+  # run-success determination.
+  defp bare_status({status, _type}), do: status
+  defp bare_status(status), do: status
 
   # The status a hook would have *on its own* — hooks have no match concept, they just run.
   defp intrinsic_status(%{kind: :hook} = planned, world, attach),
@@ -746,23 +829,23 @@ defmodule Cabbage.Messages do
     }
   end
 
-  defp test_case_started_envelope(id, test_case_id, ids) do
+  defp test_case_started_envelope(id, test_case_id, attempt, ids) do
     %{
       "testCaseStarted" => %{
         "id" => id,
         "testCaseId" => test_case_id,
-        "attempt" => 0,
+        "attempt" => attempt,
         "timestamp" => timestamp(Ids.tick(ids))
       }
     }
   end
 
-  defp test_case_finished_envelope(test_case_started_id, ids) do
+  defp test_case_finished_envelope(test_case_started_id, will_be_retried?, ids) do
     %{
       "testCaseFinished" => %{
         "testCaseStartedId" => test_case_started_id,
         "timestamp" => timestamp(Ids.tick(ids)),
-        "willBeRetried" => false
+        "willBeRetried" => will_be_retried?
       }
     }
   end
@@ -813,14 +896,4 @@ defmodule Cabbage.Messages do
   defp status_string(:ambiguous), do: "AMBIGUOUS"
 
   defp timestamp(_n), do: %{"seconds" => 0, "nanos" => 0}
-
-  # The run is unsuccessful if any step finished with a non-PASSED/SKIPPED status.
-  defp run_success?(execution_envelopes) do
-    execution_envelopes
-    |> Enum.filter(&Map.has_key?(&1, "testStepFinished"))
-    |> Enum.all?(fn env ->
-      status = get_in(env, ["testStepFinished", "testStepResult", "status"])
-      status in ["PASSED", "SKIPPED"]
-    end)
-  end
 end

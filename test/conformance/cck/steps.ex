@@ -364,6 +364,39 @@ defmodule Cabbage.Conformance.CCK.Steps do
     |> add("a step that skips", "skipped-failing-hook", 3, fn -> "skipped" end)
   end
 
+  # ---- retry areas (step definitions) ----------------------------------------
+
+  # The reference `retry.ts` tracks per-step attempt counts in module-level `let`s; here
+  # each is a fresh per-run Agent so a step "passes the Nth time" by raising on the first
+  # N-1 attempts. `Steps.for/1` is called once per run, so the counters reset per run while
+  # persisting across the retry loop's attempts.
+  def for("retry") do
+    second_time = passes_after(1)
+    third_time = passes_after(2)
+
+    StepRegistry.new()
+    |> add("a step that always passes", "retry", 3, fn -> :ok end)
+    |> add("a step that passes the second time", "retry", 8, second_time)
+    |> add("a step that passes the third time", "retry", 16, third_time)
+    |> add("a step that always fails", "retry", 23, fn -> raise "Exception in step" end)
+  end
+
+  # AMBIGUOUS does not retry: two definitions match the same step.
+  def for("retry-ambiguous") do
+    StepRegistry.new()
+    |> add("an ambiguous step", "retry-ambiguous", 3, fn -> :ok end)
+    |> add("an ambiguous step", "retry-ambiguous", 7, fn -> :ok end)
+  end
+
+  # PENDING does not retry.
+  def for("retry-pending") do
+    StepRegistry.new()
+    |> add("a pending step", "retry-pending", 3, fn -> "pending" end)
+  end
+
+  # UNDEFINED does not retry: no step definitions at all (the step stays undefined).
+  def for("retry-undefined"), do: StepRegistry.new()
+
   # ---- hook areas (hook registrations) ---------------------------------------
 
   @doc """
@@ -491,6 +524,18 @@ defmodule Cabbage.Conformance.CCK.Steps do
 
   # Read a vendored binary attachment fixture (alongside the sample's golden) as raw bytes.
   defp binary(sample, file), do: File.read!(Path.join([@data_dir, sample, file]))
+
+  # A 0-arity step fun that raises on its first `fail_count` invocations and passes after,
+  # backed by a fresh per-run Agent counter (mirroring the reference's module-level `let`).
+  # `passes_after(1)` passes on the 2nd attempt; `passes_after(2)` on the 3rd.
+  defp passes_after(fail_count) do
+    {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+    fn ->
+      n = Agent.get_and_update(counter, fn n -> {n + 1, n + 1} end)
+      if n <= fail_count, do: raise("Exception in step"), else: :ok
+    end
+  end
 
   # Transpose a list of rows (each a list of cell strings), matching DataTable#transpose.
   defp transpose([]), do: []
