@@ -96,8 +96,9 @@ defmodule MyApp.Features.CoffeeTest do
     {:ok, %{my_starting: :state, user: %User{}}}
   end
 
-  # Each scenario would generate a single test case
-  @tag :integration
+  # Each scenario would generate a single test case. Cabbage does NOT add any
+  # tags automatically; add your own with `@moduletag`/`@tag` (or feature-file
+  # `@tags`) if you want to filter scenarios via `mix test --exclude`.
   test "Buy last coffee", %{my_starting: :state, user: user} do
     # From the given
     state = %{user: user, machine: Machine.put_coffee(Machine.new, number)}
