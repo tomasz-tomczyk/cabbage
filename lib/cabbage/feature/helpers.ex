@@ -11,9 +11,11 @@ defmodule Cabbage.Feature.Helpers do
 
   # cabbage understands three kinds of string step pattern, in priority order:
   #
-  #   1. The legacy named-capture cucumber expression `{name:type}` (e.g.
-  #      `{count:int}`) -> `Cabbage.Feature.CucumberExpression`, which produces
-  #      named captures bound into the step's `vars` map.
+  #   1. The cabbage-specific named-capture expression `{name:type}` (e.g.
+  #      `{count:int}`) -> `Cabbage.Feature.NamedCaptureExpression`, which produces
+  #      named captures bound into the step's `vars` map. (The spec engine in
+  #      case 2 cannot express a named binding and rejects this syntax, so this
+  #      remains a separate, frozen mini-engine — see that module's docs.)
   #
   #   2. A standard Cucumber Expression - it must contain at least one parameter
   #      `{...}` (anonymous `{}` or typed `{int}`). Once it does, optional text
@@ -32,7 +34,7 @@ defmodule Cabbage.Feature.Helpers do
   defp to_regex_ast(term) when is_binary(term) do
     cond do
       Regex.match?(@named_parameter_format, term) ->
-        regex_string = Cabbage.Feature.CucumberExpression.to_regex_string(term)
+        regex_string = Cabbage.Feature.NamedCaptureExpression.to_regex_string(term)
         Code.string_to_quoted!("~r/#{regex_string}/")
 
       Regex.match?(@standard_expression_format, term) ->
