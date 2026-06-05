@@ -47,10 +47,7 @@ defmodule Cabbage.Mixfile do
   # Type "mix help deps" for more examples and options
   defp deps do
     [
-      # Final intended form (once the gherkin fork's `public-api` branch is pushed):
-      #   {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "public-api"}
-      # Using a path dep for local iteration against the (as-yet-unpushed) fork.
-      {:gherkin, path: "../gherkin"},
+      {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "master"},
       {:ex_doc, "~> 0.19", only: :dev},
       {:excoveralls, "~> 0.10", only: :test}
     ]
