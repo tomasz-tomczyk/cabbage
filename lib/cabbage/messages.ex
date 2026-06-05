@@ -107,8 +107,9 @@ defmodule Cabbage.Messages do
       Enum.reduce(features, {[], [], ids}, fn {source, opts}, {env_acc, pickle_acc, ids} ->
         uri = Keyword.get(opts, :uri, "")
         format = Keyword.get(opts, :format, :plain)
-        document = Gherkin.parse!(source, uri: uri)
-        feature_pickles = Gherkin.pickles(source, uri: uri)
+        parse_opts = [uri: uri, markdown: format == :markdown]
+        document = Gherkin.parse!(source, parse_opts)
+        feature_pickles = Gherkin.pickles(source, parse_opts)
 
         envelopes = [
           Message.source_envelope(uri, source, format),
