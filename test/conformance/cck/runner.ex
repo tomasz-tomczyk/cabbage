@@ -22,8 +22,8 @@ defmodule Cabbage.Conformance.CCK.Runner do
   # The CCK areas this wave targets. Deferred areas are tracked by the Mix task.
   @samples ~w(
     minimal empty backgrounds data-tables doc-strings cdata rules rules-backgrounds
-    examples-tables markdown multiple-features multiple-features-reversed unused-steps
-    undefined pending skipped ambiguous
+    examples-tables examples-tables-undefined markdown multiple-features multiple-features-reversed
+    unused-steps undefined pending skipped ambiguous
     all-statuses failedish-combinations stack-traces pending-exception skipped-exception
     parameter-types regular-expression unknown-parameter-type
     hooks hooks-named hooks-conditional hooks-skipped hooks-undefined

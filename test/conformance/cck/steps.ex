@@ -151,6 +151,24 @@ defmodule Cabbage.Conformance.CCK.Steps do
     end)
   end
 
+  # All three steps take an {int}, but the outline placeholders are substituted with
+  # non-integer Examples values (`pear`, `banana`, `apple`), so for each row exactly one
+  # expanded step text fails to match a definition and stays UNDEFINED (skipping the rest
+  # of that scenario). Definition lines mirror the reference `.ts` (4, 8, 12).
+  def for("examples-tables-undefined") do
+    StepRegistry.new()
+    |> add("there are {int} cucumbers", "examples-tables-undefined", 4, fn [count], _arg, world ->
+      {:ok, Map.put(world, :count, count)}
+    end)
+    |> add("I eat {int} cucumbers", "examples-tables-undefined", 8, fn [eaten], _arg, world ->
+      {:ok, Map.update!(world, :count, &(&1 - eaten))}
+    end)
+    |> add("I should have {int} cucumbers", "examples-tables-undefined", 12, fn [expected], _arg, world ->
+      ^expected = Map.fetch!(world, :count)
+      :ok
+    end)
+  end
+
   def for("markdown") do
     StepRegistry.new()
     |> add("some TypeScript code:", "markdown", 4, fn _args, _arg -> :ok end)

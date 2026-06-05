@@ -17,6 +17,7 @@ defmodule Cabbage.Conformance.CCKTest do
   # Areas that currently pass end-to-end. A regression here fails loudly.
   @passing ~w(
     minimal empty backgrounds data-tables doc-strings cdata rules rules-backgrounds examples-tables
+    examples-tables-undefined
     multiple-features multiple-features-reversed unused-steps undefined pending skipped ambiguous
     all-statuses failedish-combinations stack-traces pending-exception skipped-exception
     parameter-types regular-expression unknown-parameter-type
