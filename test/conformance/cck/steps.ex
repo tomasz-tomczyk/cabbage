@@ -212,6 +212,45 @@ defmodule Cabbage.Conformance.CCK.Steps do
     end)
   end
 
+  def for("parameter-types") do
+    # A custom `{flight}` parameter type (LHR-CDG) with a transformer, mirroring the
+    # reference `ParameterType({ name: 'flight', regexp: /([A-Z]{3})-([A-Z]{3})/, ... })`.
+    StepRegistry.new()
+    |> StepRegistry.define_parameter_type(
+      name: "flight",
+      regexp: ~r/([A-Z]{3})-([A-Z]{3})/,
+      transform: fn [from, to] -> %{from: from, to: to} end,
+      uri: "samples/parameter-types/parameter-types.ts",
+      line: 11
+    )
+    |> add("{flight} has been delayed", "parameter-types", 19, fn [flight] ->
+      %{from: "LHR", to: "CDG"} = flight
+      :ok
+    end)
+  end
+
+  def for("regular-expression") do
+    # A step definition defined by a *regular expression* (not a Cucumber Expression),
+    # with three optional capture groups.
+    StepRegistry.new()
+    |> add(
+      ~r/^a (.*?)(?: and a (.*?))?(?: and a (.*?))?$/,
+      "regular-expression",
+      3,
+      fn _args -> :ok end
+    )
+  end
+
+  def for("unknown-parameter-type") do
+    # The step references an UNDEFINED `{airport}` parameter type. Registration must not
+    # crash: the def becomes undefined (the step is UNDEFINED) and an
+    # undefinedParameterType message is emitted. The body would raise if ever called.
+    StepRegistry.new()
+    |> add("{airport} is closed because of a strike", "unknown-parameter-type", 3, fn _args ->
+      raise "Should not be called because airport parameter type has not been defined"
+    end)
+  end
+
   # ---- helpers ---------------------------------------------------------------
 
   defp add(registry, pattern, sample, line, fun) do

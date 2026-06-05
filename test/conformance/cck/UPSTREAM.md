@@ -32,7 +32,8 @@ Only the areas targeted so far are vendored (see `runner.ex` `@samples`). The
 status/exception wave added `all-statuses`, `failedish-combinations`, `stack-traces`,
 `pending-exception`, and `skipped-exception` (all graded), plus `test-run-exception`
 (vendored but deferred: its golden asserts a run-level crash rather than a normal run, so
-it is listed `unsupported` in `mix conformance.cck`).
+it is listed `unsupported` in `mix conformance.cck`). The parameter-type wave added
+`parameter-types`, `regular-expression`, and `unknown-parameter-type` (all graded).
 
 ## Re-vendoring
 

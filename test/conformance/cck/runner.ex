@@ -24,6 +24,7 @@ defmodule Cabbage.Conformance.CCK.Runner do
     examples-tables markdown multiple-features multiple-features-reversed unused-steps
     undefined pending skipped ambiguous
     all-statuses failedish-combinations stack-traces pending-exception skipped-exception
+    parameter-types regular-expression unknown-parameter-type
   )
 
   @doc "The list of CCK sample areas this harness runs."
