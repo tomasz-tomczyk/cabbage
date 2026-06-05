@@ -40,7 +40,8 @@ defmodule Mix.Tasks.Conformance.Cck do
   # UNSUPPORTED in its own CCK harness).
   @deferral_reasons %{
     "test-run-exception" => "asserts a run-level crash, not a normal gradeable run",
-    "skipped-failing-hook" => "requires hooks (hooks wave)"
+    "hooks-attachment" => "requires attachments (attachments wave)",
+    "global-hooks-attachments" => "requires attachments (attachments wave)"
   }
 
   @impl Mix.Task

@@ -16,15 +16,17 @@ defmodule Cabbage.Conformance.CCKTest do
 
   # Areas that currently pass end-to-end. A regression here fails loudly.
   @passing ~w(
-    empty backgrounds data-tables doc-strings cdata rules rules-backgrounds examples-tables
+    minimal empty backgrounds data-tables doc-strings cdata rules rules-backgrounds examples-tables
     multiple-features multiple-features-reversed unused-steps undefined pending skipped ambiguous
+    all-statuses failedish-combinations stack-traces pending-exception skipped-exception
+    hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
+    global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
   )
 
   # Areas blocked on gherkin-parser feature gaps (NOT on the runner):
-  #   * minimal  — Feature description lines beginning with `*` are mis-tokenized as steps.
   #   * markdown — the Markdown-with-Gherkin dialect (`.feature.md`) is not parsed.
   # Tracked as gherkin-fork follow-ups; skipped so the suite documents them without failing.
-  @blocked_on_gherkin ~w(minimal markdown)
+  @blocked_on_gherkin ~w(markdown)
 
   for sample <- @passing do
     test "CCK conformance: #{sample}" do

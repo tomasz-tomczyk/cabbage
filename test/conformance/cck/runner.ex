@@ -24,6 +24,8 @@ defmodule Cabbage.Conformance.CCK.Runner do
     examples-tables markdown multiple-features multiple-features-reversed unused-steps
     undefined pending skipped ambiguous
     all-statuses failedish-combinations stack-traces pending-exception skipped-exception
+    hooks hooks-named hooks-conditional hooks-skipped hooks-undefined
+    global-hooks global-hooks-beforeall-error global-hooks-afterall-error skipped-failing-hook
   )
 
   @doc "The list of CCK sample areas this harness runs."
@@ -54,7 +56,11 @@ defmodule Cabbage.Conformance.CCK.Runner do
   def run(sample) do
     %{features: features, reverse: reverse?} = sample_spec(sample)
     registry = Steps.for(sample)
-    run_opts = if reverse?, do: [order: :reverse], else: []
+    hooks = Steps.hooks_for(sample)
+
+    run_opts =
+      [hooks: hooks]
+      |> then(fn opts -> if reverse?, do: [{:order, :reverse} | opts], else: opts end)
 
     Messages.run_features(features, registry, run_opts)
   end

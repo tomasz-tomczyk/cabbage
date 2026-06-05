@@ -15,7 +15,7 @@ defmodule Cabbage.Conformance.CCK.Steps do
   steps.
   """
 
-  alias Cabbage.Messages.StepRegistry
+  alias Cabbage.Messages.{HookRegistry, StepRegistry}
 
   @doc "The step registry for `sample`, or an empty registry when the sample has no step defs."
   @spec for(String.t()) :: StepRegistry.t()
@@ -212,11 +212,154 @@ defmodule Cabbage.Conformance.CCK.Steps do
     end)
   end
 
+  # ---- hook areas (step definitions) -----------------------------------------
+
+  def for("hooks") do
+    StepRegistry.new()
+    |> add("a step passes", "hooks", 7, fn -> :ok end)
+    |> add("a step fails", "hooks", 11, fn -> raise "Exception in step" end)
+  end
+
+  def for("hooks-named") do
+    StepRegistry.new()
+    |> add("a step passes", "hooks-named", 7, fn -> :ok end)
+  end
+
+  def for("hooks-conditional") do
+    StepRegistry.new()
+    |> add("a step passes", "hooks-conditional", 11, fn -> :ok end)
+  end
+
+  def for("hooks-skipped") do
+    StepRegistry.new()
+    |> add("a normal step", "hooks-skipped", 13, fn -> :ok end)
+    |> add("a step that skips", "hooks-skipped", 17, fn -> "skipped" end)
+  end
+
+  def for("hooks-undefined"), do: StepRegistry.new()
+
+  def for("global-hooks") do
+    StepRegistry.new()
+    |> add("a step passes", "global-hooks", 11, fn -> :ok end)
+    |> add("a step fails", "global-hooks", 15, fn -> raise "Exception in step" end)
+  end
+
+  def for("global-hooks-beforeall-error") do
+    StepRegistry.new()
+    |> add("a step passes", "global-hooks-beforeall-error", 15, fn -> :ok end)
+  end
+
+  def for("global-hooks-afterall-error") do
+    StepRegistry.new()
+    |> add("a step passes", "global-hooks-afterall-error", 11, fn -> :ok end)
+  end
+
+  def for("skipped-failing-hook") do
+    StepRegistry.new()
+    |> add("a step that skips", "skipped-failing-hook", 3, fn -> "skipped" end)
+  end
+
+  # ---- hook areas (hook registrations) ---------------------------------------
+
+  @doc """
+  The hook registry for `sample`, mirroring the reference `Before`/`After`/`BeforeAll`/
+  `AfterAll` registrations (registration order is significant — see
+  `Cabbage.Messages.HookRegistry`). Samples with no hooks get an empty registry.
+  """
+  @spec hooks_for(String.t()) :: HookRegistry.t()
+  def hooks_for(sample)
+
+  def hooks_for("hooks") do
+    HookRegistry.new()
+    |> before(fn -> :ok end, "hooks", 3)
+    |> aftr(fn -> :ok end, "hooks", 15)
+  end
+
+  def hooks_for("hooks-named") do
+    HookRegistry.new()
+    |> before(fn -> :ok end, "hooks-named", 3, name: "A named before hook")
+    |> aftr(fn -> :ok end, "hooks-named", 11, name: "A named after hook")
+  end
+
+  def hooks_for("hooks-conditional") do
+    HookRegistry.new()
+    |> before(fn -> :ok end, "hooks-conditional", 3, tag: "@passing-hook")
+    |> before(fn -> raise "Exception in conditional hook" end, "hooks-conditional", 7, tag: "@fail-before")
+    |> aftr(fn -> raise "Exception in conditional hook" end, "hooks-conditional", 15, tag: "@fail-after")
+    |> aftr(fn -> :ok end, "hooks-conditional", 19, tag: "@passing-hook")
+  end
+
+  def hooks_for("hooks-skipped") do
+    HookRegistry.new()
+    |> before(fn -> :ok end, "hooks-skipped", 3)
+    |> before(fn -> "skipped" end, "hooks-skipped", 7, tag: "@skip-before")
+    |> before(fn -> :ok end, "hooks-skipped", 9)
+    |> aftr(fn -> :ok end, "hooks-skipped", 19)
+    |> aftr(fn -> "skipped" end, "hooks-skipped", 23, tag: "@skip-after")
+    |> aftr(fn -> :ok end, "hooks-skipped", 25)
+  end
+
+  def hooks_for("hooks-undefined") do
+    HookRegistry.new()
+    |> before(fn -> :ok end, "hooks-undefined", 3)
+    |> aftr(fn -> :ok end, "hooks-undefined", 5)
+  end
+
+  def hooks_for("global-hooks") do
+    HookRegistry.new()
+    |> before_all(fn -> :ok end, "global-hooks", 3)
+    |> before_all(fn -> :ok end, "global-hooks", 7)
+    |> after_all(fn -> :ok end, "global-hooks", 19)
+    |> after_all(fn -> :ok end, "global-hooks", 23)
+  end
+
+  def hooks_for("global-hooks-beforeall-error") do
+    HookRegistry.new()
+    |> before_all(fn -> :ok end, "global-hooks-beforeall-error", 3)
+    |> before_all(fn -> raise "BeforeAll hook went wrong" end, "global-hooks-beforeall-error", 7)
+    |> before_all(fn -> :ok end, "global-hooks-beforeall-error", 11)
+    |> after_all(fn -> :ok end, "global-hooks-beforeall-error", 19)
+    |> after_all(fn -> :ok end, "global-hooks-beforeall-error", 23)
+  end
+
+  def hooks_for("global-hooks-afterall-error") do
+    HookRegistry.new()
+    |> before_all(fn -> :ok end, "global-hooks-afterall-error", 3)
+    |> before_all(fn -> :ok end, "global-hooks-afterall-error", 7)
+    |> after_all(fn -> :ok end, "global-hooks-afterall-error", 15)
+    |> after_all(fn -> raise "AfterAll hook went wrong" end, "global-hooks-afterall-error", 19)
+    |> after_all(fn -> :ok end, "global-hooks-afterall-error", 23)
+  end
+
+  def hooks_for("skipped-failing-hook") do
+    HookRegistry.new()
+    |> aftr(fn -> raise "whoops" end, "skipped-failing-hook", 5)
+  end
+
+  def hooks_for(_sample), do: HookRegistry.new()
+
   # ---- helpers ---------------------------------------------------------------
 
   defp add(registry, pattern, sample, line, fun) do
     uri = "samples/#{sample}/#{sample}.ts"
     StepRegistry.add(registry, pattern, fun, uri: uri, line: line)
+  end
+
+  defp before(registry, fun, sample, line, opts \\ []),
+    do: hook(registry, :before_test_case, fun, sample, line, opts)
+
+  defp aftr(registry, fun, sample, line, opts \\ []),
+    do: hook(registry, :after_test_case, fun, sample, line, opts)
+
+  defp before_all(registry, fun, sample, line, opts \\ []),
+    do: hook(registry, :before_test_run, fun, sample, line, opts)
+
+  defp after_all(registry, fun, sample, line, opts \\ []),
+    do: hook(registry, :after_test_run, fun, sample, line, opts)
+
+  defp hook(registry, type, fun, sample, line, opts) do
+    uri = "samples/#{sample}/#{sample}.ts"
+    HookRegistry.add(registry, type, fun, Keyword.merge([uri: uri, line: line], opts))
   end
 
   # Transpose a list of rows (each a list of cell strings), matching DataTable#transpose.
