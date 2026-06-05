@@ -1,5 +1,10 @@
 Logger.configure_backend(:console, colors: [enabled: false])
-ExUnit.start(trace: "--trace" in System.argv())
+
+# The tag-expression conformance scoreboard is tagged :conformance and excluded
+# from the default `mix test` run so the suite stays fast and green. Run it with
+# `mix conformance.tags` (the scoreboard task) or `mix test --only conformance`;
+# an explicit `--only` overrides this exclusion.
+ExUnit.start(trace: "--trace" in System.argv(), exclude: [:conformance])
 
 # Beam files compiled on demand
 path = Path.expand("../tmp/beams", __DIR__)

@@ -25,6 +25,17 @@ defmodule Cabbage.Mixfile do
     ]
   end
 
+  # Run the tag-expression conformance scoreboard in :test, where the vendored
+  # corpus and the conformance harness live, without requiring MIX_ENV=test.
+  def cli do
+    [
+      preferred_envs: [
+        "conformance.tags": :test,
+        conformance: :test
+      ]
+    ]
+  end
+
   # Configuration for the OTP application
   #
   # Type "mix help compile.app" for more information
@@ -62,7 +73,14 @@ defmodule Cabbage.Mixfile do
   end
 
   defp aliases do
-    [publish: ["hex.publish", "hex.publish docs", "tag"], tag: &tag_release/1]
+    [
+      publish: ["hex.publish", "hex.publish docs", "tag"],
+      tag: &tag_release/1,
+      # Run the conformance suite (tagged :conformance, excluded by default).
+      # `mix conformance.tags` prints the richer scoreboard; this alias runs the
+      # per-corpus ExUnit assertions.
+      conformance: ["test --only conformance"]
+    ]
   end
 
   defp tag_release(_) do
