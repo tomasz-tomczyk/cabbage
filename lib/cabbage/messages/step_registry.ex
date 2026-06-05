@@ -58,9 +58,11 @@ defmodule Cabbage.Messages.StepRegistry do
   Register a step definition.
 
   `pattern` is a Cucumber Expression string or a `Regex`. `fun` receives the matched,
-  transformed arguments (one per capture) and may return `"pending"`, `"skipped"`,
-  `nil`, or raise — the runner maps those to step statuses. `:uri`/`:line` populate the
-  emitted `stepDefinition.sourceReference`.
+  transformed arguments (one per capture) and may return `:ok`/`nil`/`{:ok, world}`
+  (PASSED), the strings `"pending"`/`"skipped"`, raise `Cabbage.PendingError` /
+  `Cabbage.SkippedError` (PENDING/SKIPPED *with* an exception), or raise anything else
+  (FAILED) — see `Cabbage.Messages` for the full status mapping. `:uri`/`:line` populate
+  the emitted `stepDefinition.sourceReference`.
   """
   @spec add(t(), String.t() | Regex.t(), function(), keyword()) :: t()
   def add(%__MODULE__{} = registry, pattern, fun, opts \\ []) when is_function(fun) do

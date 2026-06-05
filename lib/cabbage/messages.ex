@@ -29,14 +29,45 @@ defmodule Cabbage.Messages do
   ## Step outcome protocol
 
   A step definition's run function may return `:ok`, `nil`, `{:ok, world}`, the strings
-  `"pending"`/`"skipped"`, or raise. The runner maps these to step statuses. The first
-  non-`PASSED` step in a scenario causes all later steps to be reported `SKIPPED`.
+  `"pending"`/`"skipped"`, or raise. The runner maps these to step statuses:
 
-  ## Status
+    * `:ok` / `nil` / `{:ok, world}` -> `PASSED`
+    * `"pending"` / `"skipped"`       -> `PENDING` / `SKIPPED` (no `exception`)
+    * `raise Cabbage.PendingError`    -> `PENDING` with `exception.type = "PendingException"`
+    * `raise Cabbage.SkippedError`    -> `SKIPPED` with `exception.type = "SkippedException"`
+    * any other raise                 -> `FAILED` (`AssertionError` for a failed match /
+      ExUnit assertion, otherwise `Error`)
+
+  Match count decides the rest: 0 matches -> `UNDEFINED` (+ a `suggestion` envelope),
+  >1 -> `AMBIGUOUS`.
+
+  ## Skip propagation (cucumber-js / CCK `failedish-combinations` semantics)
+
+  A step's *intrinsic* status is computed first, then two flags thread through the
+  scenario:
+
+    * a prior step reported a non-`PASSED` status -> later *executable* steps (single
+      match, would run a def) become `SKIPPED`, but `UNDEFINED`/`AMBIGUOUS` steps keep
+      their intrinsic status;
+    * a prior step's intrinsic status was `SKIPPED` (a `"skipped"` return or a raised
+      `Cabbage.SkippedError`) -> *every* later step becomes `SKIPPED`, including
+      `UNDEFINED`/`AMBIGUOUS` ones.
+
+  The run is `success: true` iff every step is `PASSED` or `SKIPPED` (a scenario that only
+  skips is still a successful run).
+
+  ## Status / extension notes
 
   Run-structure envelopes are assembled here; Source/GherkinDocument/Pickle and NDJSON
   serialization are reused from `Gherkin.Message`. Hooks, attachments, parameter-type and
-  retry envelopes are *not* emitted yet — see the module's extension notes.
+  retry envelopes are *not* emitted yet.
+
+  Ambiguity (cabbage-ex/cabbage#88) is detected here via the match count. It is **not**
+  surfaced in the compile-time `Cabbage.Feature` runner: that path's
+  `find_implementation_of_step/2` uses first-match-wins, and existing feature modules may
+  rely on that (general pattern + specific override). Turning first-match into a
+  compile-time ambiguity error is a behavioural change for shipped code and is left to a
+  dedicated change rather than this result-semantics wave.
   """
 
   alias Cabbage.Messages.{Ids, Matcher, StepRegistry}
@@ -223,43 +254,80 @@ defmodule Cabbage.Messages do
     {test_case_started_id, ids} = Ids.next(ids)
     started = test_case_started_envelope(test_case_started_id, test_case.id, ids)
 
-    {step_envelopes, _world, _skip_rest, ids} =
-      Enum.reduce(test_case.steps, {[], %{}, false, ids}, fn planned_step, {acc, world, skip_rest, ids} ->
-        {envelopes, new_world, now_skip, ids} =
-          execute_step(planned_step, test_case_started_id, world, skip_rest, ids)
+    # Thread two skip-propagation flags across the scenario's steps (cucumber-js semantics,
+    # see the CCK `failedish-combinations` sample):
+    #
+    #   * `failed_ish?`    — a prior step reported a non-PASSED status. This skips later
+    #                        *executable* steps (a single match that would run a def) but
+    #                        leaves UNDEFINED/AMBIGUOUS steps reporting their own status.
+    #   * `intrinsic_skip?` — a prior step's *intrinsic* status was SKIPPED (a `"skipped"`
+    #                        return or a raised `Cabbage.SkippedError`). A real skip
+    #                        cascades to *every* later step, even undefined/ambiguous ones.
+    acc0 = %{envelopes: [], world: %{}, failed_ish?: false, intrinsic_skip?: false, ids: ids}
 
-        {acc ++ envelopes, new_world, skip_rest or now_skip, ids}
+    acc =
+      Enum.reduce(test_case.steps, acc0, fn planned_step, acc ->
+        execute_step(planned_step, test_case_started_id, acc)
       end)
 
-    finished = test_case_finished_envelope(test_case_started_id, ids)
-    {[started] ++ step_envelopes ++ [finished], ids}
+    finished = test_case_finished_envelope(test_case_started_id, acc.ids)
+    {[started] ++ acc.envelopes ++ [finished], acc.ids}
   end
 
-  # When a prior step did not pass, remaining steps are reported SKIPPED without running.
-  defp execute_step(planned_step, test_case_started_id, world, true = _skip_rest, ids) do
-    {envelopes, ids} =
-      emit_step(planned_step, test_case_started_id, ids, :skipped, [])
+  # Execute (or skip) one planned step, returning the updated accumulator.
+  defp execute_step(planned_step, test_case_started_id, acc) do
+    {intrinsic, new_world} = intrinsic_status(planned_step, acc.world)
+    reported = report_status(intrinsic, acc)
 
-    {envelopes, world, false, ids}
+    suggestions =
+      if reported == :undefined,
+        do: suggestion_snippets(planned_step.pickle_step.text),
+        else: []
+
+    {step_envelopes, ids} =
+      emit_step(planned_step, test_case_started_id, acc.ids, reported, suggestions)
+
+    %{
+      acc
+      | envelopes: acc.envelopes ++ step_envelopes,
+        world: new_world,
+        ids: ids,
+        failed_ish?: acc.failed_ish? or reported != :passed,
+        intrinsic_skip?: acc.intrinsic_skip? or intrinsic_skip?(intrinsic)
+    }
   end
 
-  defp execute_step(planned_step, test_case_started_id, world, false, ids) do
+  # The status a step would have *on its own*, ignoring prior steps: UNDEFINED when no
+  # definition matches, AMBIGUOUS when more than one does, otherwise the run result.
+  defp intrinsic_status(planned_step, world) do
     case planned_step.matches do
-      [] ->
-        suggestions = suggestion_snippets(planned_step.pickle_step.text)
-        {envelopes, ids} = emit_step(planned_step, test_case_started_id, ids, :undefined, suggestions)
-        {envelopes, world, true, ids}
-
-      [match] ->
-        {status, new_world} = run_step(match, planned_step.pickle_step, world)
-        {envelopes, ids} = emit_step(planned_step, test_case_started_id, ids, status, [])
-        {envelopes, new_world, not passed?(status), ids}
-
-      _ambiguous ->
-        {envelopes, ids} = emit_step(planned_step, test_case_started_id, ids, :ambiguous, [])
-        {envelopes, world, true, ids}
+      [] -> {:undefined, world}
+      [match] -> run_step(match, planned_step.pickle_step, world)
+      _ambiguous -> {:ambiguous, world}
     end
   end
+
+  # Apply the skip-propagation rule to turn an intrinsic status into the reported one.
+  # A real (intrinsic) skip earlier cascades to everything; otherwise a prior failed-ish
+  # step only skips later *executable* steps, leaving undefined/ambiguous intact.
+  defp report_status(_intrinsic, %{intrinsic_skip?: true}), do: :skipped
+
+  defp report_status(intrinsic, %{failed_ish?: true}) do
+    if executable?(intrinsic), do: :skipped, else: intrinsic
+  end
+
+  defp report_status(intrinsic, _acc), do: intrinsic
+
+  # Executable steps are the ones that actually invoke a step definition; undefined and
+  # ambiguous steps never run, so they are not skippable by a prior failed-ish step.
+  defp executable?(:undefined), do: false
+  defp executable?(:ambiguous), do: false
+  defp executable?(_runnable), do: true
+
+  # Only a genuine SKIPPED outcome (return value or raised SkippedError) cascades fully.
+  defp intrinsic_skip?(:skipped), do: true
+  defp intrinsic_skip?({:skipped, _type}), do: true
+  defp intrinsic_skip?(_other), do: false
 
   defp run_step(match, pickle_step, world) do
     step_argument = step_argument(pickle_step)
@@ -274,6 +342,10 @@ defmodule Cabbage.Messages do
       _ -> {:passed, world}
     end
   rescue
+    # Dedicated pending/skip exceptions carry the reference type names so the message
+    # stream distinguishes "pending via exception" from "pending via return value".
+    _error in Cabbage.PendingError -> {{:pending, "PendingException"}, world}
+    _error in Cabbage.SkippedError -> {{:skipped, "SkippedException"}, world}
     error -> {{:failed, exception_type(error)}, world}
   end
 
@@ -285,9 +357,6 @@ defmodule Cabbage.Messages do
   defp exception_type(%MatchError{}), do: "AssertionError"
   defp exception_type(%{__struct__: ExUnit.AssertionError}), do: "AssertionError"
   defp exception_type(_other), do: "Error"
-
-  defp passed?(:passed), do: true
-  defp passed?(_), do: false
 
   # Step funs may accept arity 0..3. We pass (args, step_argument, world) and adapt.
   defp apply_step_fun(fun, args, step_argument, world) do
@@ -401,12 +470,17 @@ defmodule Cabbage.Messages do
     }
   end
 
-  defp maybe_put_exception(result, {:failed, type}),
+  # Failed steps, and pending/skipped raised *via an exception*, carry an `exception`
+  # object whose `type` matches the reference (`Error`/`AssertionError`, `PendingException`,
+  # `SkippedException`). Pending/skipped reached via a *return value* carry none.
+  defp maybe_put_exception(result, {status, type}) when status in [:failed, :pending, :skipped],
     do: Map.put(result, "exception", %{"type" => type})
 
   defp maybe_put_exception(result, _status), do: result
 
   defp status_string({:failed, _type}), do: "FAILED"
+  defp status_string({:pending, _type}), do: "PENDING"
+  defp status_string({:skipped, _type}), do: "SKIPPED"
   defp status_string(:passed), do: "PASSED"
   defp status_string(:undefined), do: "UNDEFINED"
   defp status_string(:pending), do: "PENDING"
