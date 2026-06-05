@@ -191,7 +191,17 @@ defmodule Cabbage.Messages do
     # Otherwise plan every pickle into a TestCase — weaving in applicable before/after scenario
     # hooks as `hookId` test steps — then execute each.
     {test_case_envelopes, execution_envelopes, final_failed?, ids} =
-      plan_and_execute(pickles, before_all_ok?, registry, hook_registry, reg, run_opts, test_run_started_id, attach, ids)
+      plan_and_execute(
+        pickles,
+        before_all_ok?,
+        registry,
+        hook_registry,
+        reg,
+        run_opts,
+        test_run_started_id,
+        attach,
+        ids
+      )
 
     # 7. AfterAll global hooks, in *reverse* registration order, before testRunFinished.
     {after_all_envelopes, after_all_ok?, _ids} =

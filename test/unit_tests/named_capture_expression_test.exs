@@ -16,9 +16,7 @@ defmodule Cabbage.Feature.NamedCaptureExpressionTest do
     end
 
     test "two integer parameters each get their own named capture" do
-      assert NamedCaptureExpression.to_regex_string(
-               "{tea_count:int} tea and {coffee_count:int} coffee"
-             ) ==
+      assert NamedCaptureExpression.to_regex_string("{tea_count:int} tea and {coffee_count:int} coffee") ==
                ~S/^(?<tea_count>\d+) tea and (?<coffee_count>\d+) coffee$/
     end
 
@@ -28,9 +26,7 @@ defmodule Cabbage.Feature.NamedCaptureExpressionTest do
     end
 
     test "mixed int and float parameters" do
-      assert NamedCaptureExpression.to_regex_string(
-               "It cost $ {price:int} or $ {cost:float} to be precise"
-             ) ==
+      assert NamedCaptureExpression.to_regex_string("It cost $ {price:int} or $ {cost:float} to be precise") ==
                ~S/^It cost $ (?<price>\d+) or $ (?<cost>\d+\.\d+) to be precise$/
     end
 
@@ -40,9 +36,7 @@ defmodule Cabbage.Feature.NamedCaptureExpressionTest do
     end
 
     test "a {name:string} capture" do
-      assert NamedCaptureExpression.to_regex_string(
-               "My full name is {full_name:string} I tell you!"
-             ) ==
+      assert NamedCaptureExpression.to_regex_string("My full name is {full_name:string} I tell you!") ==
                ~S/^My full name is (?<full_name>"(.*)") I tell you!$/
     end
 
