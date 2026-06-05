@@ -9,9 +9,22 @@ defmodule Cabbage.Feature.Helpers do
     quote(do: nil)
   end
 
+  # A cucumber-expression parameter looks like `{name:type}`. When a string step
+  # pattern contains one, it goes through the cucumber-expression engine (which
+  # turns parameters into named captures). When it does NOT, the string is
+  # treated as an exact literal match - regex metacharacters ($, (, ), +, ., /,
+  # ...) are escaped so they match literally rather than being interpreted as
+  # regex syntax. See issue #64.
+  @parameter_format ~r/\{.+:.+\}/u
+
   defp to_regex_ast(term) when is_binary(term) do
-    regex_string = Cabbage.Feature.CucumberExpression.to_regex_string(term)
-    Code.string_to_quoted!("~r/#{regex_string}/")
+    if Regex.match?(@parameter_format, term) do
+      regex_string = Cabbage.Feature.CucumberExpression.to_regex_string(term)
+      Code.string_to_quoted!("~r/#{regex_string}/")
+    else
+      regex = Regex.compile!("^" <> Regex.escape(term) <> "$")
+      Macro.escape(regex)
+    end
   end
 
   defp to_regex_ast(term), do: term
