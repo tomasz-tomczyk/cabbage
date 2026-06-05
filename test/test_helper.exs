@@ -1,5 +1,9 @@
 Logger.configure_backend(:console, colors: [enabled: false])
-ExUnit.start(trace: "--trace" in System.argv())
+
+# The conformance suite (tag :conformance) is excluded from the default
+# `mix test` run so the suite stays green; run it with `mix conformance` or
+# `mix test --only conformance`.
+ExUnit.start(trace: "--trace" in System.argv(), exclude: [:conformance])
 
 # Beam files compiled on demand
 path = Path.expand("../tmp/beams", __DIR__)

@@ -25,6 +25,19 @@ defmodule Cabbage.Mixfile do
     ]
   end
 
+  # Run the conformance scoreboard / suite in the :test environment without a
+  # MIX_ENV warning. `conformance.expressions` is a Mix.Task that prints the
+  # scoreboard; `conformance` is the alias below that runs the tagged ExUnit
+  # conformance suite.
+  def cli do
+    [
+      preferred_envs: [
+        "conformance.expressions": :test,
+        conformance: :test
+      ]
+    ]
+  end
+
   # Configuration for the OTP application
   #
   # Type "mix help compile.app" for more information
@@ -62,7 +75,12 @@ defmodule Cabbage.Mixfile do
   end
 
   defp aliases do
-    [publish: ["hex.publish", "hex.publish docs", "tag"], tag: &tag_release/1]
+    [
+      publish: ["hex.publish", "hex.publish docs", "tag"],
+      tag: &tag_release/1,
+      # Run only the tagged conformance suite (excluded from the default run).
+      conformance: ["test --only conformance"]
+    ]
   end
 
   defp tag_release(_) do
