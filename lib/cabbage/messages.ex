@@ -70,7 +70,7 @@ defmodule Cabbage.Messages do
   dedicated change rather than this result-semantics wave.
   """
 
-  alias Cabbage.Messages.{Ids, Matcher, StepRegistry}
+  alias Cabbage.Messages.{HookRegistry, Ids, Matcher, StepRegistry}
   alias Gherkin.Message
 
   @type envelope :: map()
@@ -81,25 +81,32 @@ defmodule Cabbage.Messages do
   Options:
 
     * `:uri` — the source uri embedded in Source/GherkinDocument/Pickle (default `""`);
-    * `:format` — `:plain` (default) or `:markdown` for the Source media type.
+    * `:format` — `:plain` (default) or `:markdown` for the Source media type;
+    * `:hooks` — a `Cabbage.Messages.HookRegistry` of before/after-scenario and
+      BeforeAll/AfterAll hooks (default: no hooks).
   """
   @spec run(String.t(), StepRegistry.t(), keyword()) :: [envelope()]
   def run(feature_source, %StepRegistry{} = registry, opts \\ []) do
-    run_features([{feature_source, opts}], registry)
+    {hooks, feature_opts} = Keyword.pop(opts, :hooks)
+    run_opts = if hooks, do: [hooks: hooks], else: []
+    run_features([{feature_source, feature_opts}], registry, run_opts)
   end
 
   @doc """
   Run several features as one test run.
 
-  `features` is a list of `{feature_source, opts}` (same opts as `run/3`). The parser-side
-  envelopes are emitted per feature (Source, GherkinDocument, Pickles), then a single set of
-  StepDefinition / TestRun* / TestCase* / execution envelopes spans all pickles — matching
-  the `multiple-features` golden.
+  `features` is a list of `{feature_source, opts}` (same per-feature opts as `run/3`,
+  i.e. `:uri`/`:format`). `run_opts` may carry `:order` (`:reverse`) and `:hooks` (a
+  `Cabbage.Messages.HookRegistry`). The parser-side envelopes are emitted per feature
+  (Source, GherkinDocument, Pickles), then a single set of Hook / StepDefinition / TestRun*
+  / TestCase* / execution envelopes spans all pickles — matching the `multiple-features`
+  golden.
   """
   @spec run_features([{String.t(), keyword()}], StepRegistry.t(), keyword()) :: [envelope()]
   def run_features(features, registry, run_opts \\ [])
 
   def run_features(features, %StepRegistry{} = registry, run_opts) do
+    hook_registry = Keyword.get(run_opts, :hooks) || HookRegistry.new()
     ids = Ids.new()
 
     # 1. Parser-side envelopes per feature, collecting pickles in document order.
@@ -124,7 +131,15 @@ defmodule Cabbage.Messages do
     # parser-side envelopes keep document order.
     pickles = if run_opts[:order] == :reverse, do: Enum.reverse(pickles), else: pickles
 
-    # 2. StepDefinition envelopes (one per registered definition, registration order).
+    # 2a. Hook definition envelopes (one per registered hook) — assigned ids the test steps
+    # and testRunHook* envelopes reference back. The reference emits the registration section
+    # in source order (before/beforeAll hooks, then step defs, then after/afterAll hooks), so
+    # we split the hook defs into a "before" block (emitted ahead of step defs) and an "after"
+    # block (after them). The normalizer sorts each contiguous block by type+tag expression.
+    {before_hook_defs, after_hook_defs, hook_ids, ids} =
+      hook_definition_envelopes(hook_registry, ids)
+
+    # 2b. StepDefinition envelopes (one per registered definition, registration order).
     {step_def_envelopes, def_ids} = step_definition_envelopes(registry, ids)
     ids = def_ids.ids
 
@@ -132,33 +147,145 @@ defmodule Cabbage.Messages do
     {test_run_started_id, ids} = Ids.next(ids)
     test_run_started = test_run_started_envelope(test_run_started_id)
 
-    # 4. Plan every pickle into a TestCase (all emitted before execution begins).
-    {test_cases, ids} =
-      Enum.map_reduce(pickles, ids, fn pickle, ids ->
-        plan_test_case(pickle, registry, def_ids.by_definition, test_run_started_id, ids)
-      end)
+    # 4. BeforeAll global hooks, in registration order, right after testRunStarted. A failed
+    # BeforeAll fails the run and suppresses all test-case execution (cleanup hooks still run).
+    {before_all_envelopes, before_all_ok?, ids} =
+      run_global_hooks(:before_test_run, hook_registry, hook_ids, test_run_started_id, ids)
 
-    test_case_envelopes = Enum.map(test_cases, & &1.envelope)
+    # 5/6. When a BeforeAll failed, the run is aborted: no TestCase is planned or executed
+    # (the pickles are still emitted in the parser section, but they never become test cases).
+    # Otherwise plan every pickle into a TestCase — weaving in applicable before/after scenario
+    # hooks as `hookId` test steps — then execute each.
+    {test_case_envelopes, execution_envelopes, ids} =
+      if before_all_ok? do
+        {test_cases, ids} =
+          Enum.map_reduce(pickles, ids, fn pickle, ids ->
+            plan_test_case(pickle, registry, def_ids.by_definition, hook_registry, hook_ids, test_run_started_id, ids)
+          end)
 
-    # 5. Execute each planned test case, threading a per-scenario world.
-    {execution_envelopes, _ids} =
-      Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
-        execute_test_case(test_case, ids)
-      end)
+        {execution, ids} =
+          Enum.flat_map_reduce(test_cases, ids, fn test_case, ids ->
+            execute_test_case(test_case, ids)
+          end)
 
-    success = run_success?(execution_envelopes)
+        {Enum.map(test_cases, & &1.envelope), execution, ids}
+      else
+        {[], [], ids}
+      end
+
+    # 7. AfterAll global hooks, in *reverse* registration order, before testRunFinished.
+    {after_all_envelopes, after_all_ok?, _ids} =
+      run_global_hooks(:after_test_run, hook_registry, hook_ids, test_run_started_id, ids)
+
+    success =
+      before_all_ok? and after_all_ok? and run_success?(execution_envelopes)
 
     parser_envelopes ++
+      before_hook_defs ++
       step_def_envelopes ++
+      after_hook_defs ++
       [test_run_started] ++
+      before_all_envelopes ++
       test_case_envelopes ++
       execution_envelopes ++
+      after_all_envelopes ++
       [test_run_finished_envelope(test_run_started_id, success)]
   end
 
   @doc "Serialize an envelope list to NDJSON using the gherkin key-sorted serializer."
   @spec to_ndjson([envelope()]) :: String.t()
   def to_ndjson(envelopes), do: Message.to_ndjson(envelopes)
+
+  # ---- Hook definition envelopes ---------------------------------------------
+
+  # Assign an id to every registered hook (registration order) and emit its `hook` envelope.
+  # Returns the "before" block (before/beforeAll hook defs), the "after" block (after/afterAll
+  # hook defs), and a hook->id map. The before/after split mirrors the reference's source-order
+  # registration section: before hooks precede step defs, after hooks follow them.
+  defp hook_definition_envelopes(hook_registry, ids) do
+    {pairs, ids} =
+      hook_registry
+      |> HookRegistry.hooks()
+      |> Enum.map_reduce(ids, fn hook, ids ->
+        {id, ids} = Ids.next(ids)
+        {{hook, id}, ids}
+      end)
+
+    {before_pairs, after_pairs} =
+      Enum.split_with(pairs, fn {hook, _id} ->
+        hook.type in [:before_test_case, :before_test_run]
+      end)
+
+    to_envelopes = fn list -> Enum.map(list, fn {hook, id} -> hook_definition_envelope(hook, id) end) end
+    {to_envelopes.(before_pairs), to_envelopes.(after_pairs), Map.new(pairs), ids}
+  end
+
+  defp hook_definition_envelope(hook, id) do
+    inner =
+      %{"id" => id, "type" => hook_type_string(hook.type), "sourceReference" => source_reference(hook)}
+      |> maybe_put("name", hook.name)
+      |> maybe_put("tagExpression", hook.tag_expression)
+
+    %{"hook" => inner}
+  end
+
+  defp hook_type_string(:before_test_case), do: "BEFORE_TEST_CASE"
+  defp hook_type_string(:after_test_case), do: "AFTER_TEST_CASE"
+  defp hook_type_string(:before_test_run), do: "BEFORE_TEST_RUN"
+  defp hook_type_string(:after_test_run), do: "AFTER_TEST_RUN"
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # ---- Global (BeforeAll/AfterAll) hooks -------------------------------------
+
+  # Run every global hook of `type` and emit a testRunHookStarted/testRunHookFinished pair
+  # per hook. BeforeAll runs in registration order; AfterAll in *reverse*. Every hook runs
+  # even if an earlier one failed (cleanup semantics); the boolean reports whether all
+  # passed-or-skipped, which feeds testRunFinished.success.
+  defp run_global_hooks(type, hook_registry, hook_ids, test_run_started_id, ids) do
+    hooks =
+      hook_registry
+      |> HookRegistry.global_hooks()
+      |> Enum.filter(&(&1.type == type))
+
+    hooks = if type == :after_test_run, do: Enum.reverse(hooks), else: hooks
+
+    {envelopes, {all_ok?, ids}} =
+      Enum.flat_map_reduce(hooks, {true, ids}, fn hook, {all_ok?, ids} ->
+        {status, _world} = run_hook(hook, [], %{})
+        {pair, ids} = test_run_hook_envelopes(test_run_started_id, hook_ids[hook], status, ids)
+        {pair, {all_ok? and hook_success?(status), ids}}
+      end)
+
+    {envelopes, all_ok?, ids}
+  end
+
+  defp test_run_hook_envelopes(test_run_started_id, hook_id, status, ids) do
+    {started_id, ids} = Ids.next(ids)
+
+    started = %{
+      "testRunHookStarted" => %{
+        "testRunStartedId" => test_run_started_id,
+        "id" => started_id,
+        "hookId" => hook_id,
+        "timestamp" => timestamp(Ids.tick(ids))
+      }
+    }
+
+    finished = %{
+      "testRunHookFinished" => %{
+        "testRunHookStartedId" => started_id,
+        "timestamp" => timestamp(Ids.tick(ids)),
+        "result" => step_result(status)
+      }
+    }
+
+    {[started, finished], ids}
+  end
+
+  defp hook_success?({:failed, _type}), do: false
+  defp hook_success?(_other), do: true
 
   # ---- StepDefinition envelopes ----------------------------------------------
 
@@ -205,22 +332,19 @@ defmodule Cabbage.Messages do
 
   # ---- TestCase planning -----------------------------------------------------
 
-  defp plan_test_case(pickle, registry, def_ids, test_run_started_id, ids) do
+  defp plan_test_case(pickle, registry, def_ids, hook_registry, hook_ids, test_run_started_id, ids) do
     {test_case_id, ids} = Ids.next(ids)
 
-    {planned_steps, ids} =
-      Enum.map_reduce(pickle.steps, ids, fn pickle_step, ids ->
-        {test_step_id, ids} = Ids.next(ids)
-        matches = Matcher.matches(registry, pickle_step.text)
+    pickle_tags = Enum.map(pickle.tags, & &1.name)
+    {before_hooks, after_hooks} = applicable_scenario_hooks(hook_registry, pickle_tags)
 
-        {%{
-           id: test_step_id,
-           pickle_step: pickle_step,
-           matches: matches,
-           definition_ids: Enum.map(matches, fn m -> Map.fetch!(def_ids, m.definition) end)
-         }, ids}
-      end)
+    # Before scenario hooks -> hook test steps; pickle steps -> step test steps; After
+    # scenario hooks -> hook test steps. Each gets its own test step id, in this order.
+    {before_planned, ids} = plan_hook_steps(before_hooks, hook_ids, ids)
+    {step_planned, ids} = plan_pickle_steps(pickle.steps, registry, def_ids, ids)
+    {after_planned, ids} = plan_hook_steps(after_hooks, hook_ids, ids)
 
+    planned_steps = before_planned ++ step_planned ++ after_planned
     test_steps_json = Enum.map(planned_steps, &test_step_json/1)
 
     envelope = %{
@@ -232,10 +356,56 @@ defmodule Cabbage.Messages do
       }
     }
 
-    {%{id: test_case_id, steps: planned_steps, envelope: envelope}, ids}
+    {%{
+       id: test_case_id,
+       before_hooks: before_planned,
+       steps: step_planned,
+       after_hooks: after_planned,
+       envelope: envelope
+     }, ids}
   end
 
-  defp test_step_json(planned_step) do
+  # Scenario hooks that apply to a pickle: before hooks (registration order) and after hooks
+  # (registration order), each filtered by its tag expression against the pickle's tags.
+  defp applicable_scenario_hooks(hook_registry, pickle_tags) do
+    hooks =
+      hook_registry
+      |> HookRegistry.scenario_hooks()
+      |> Enum.filter(&hook_applies?(&1, pickle_tags))
+
+    Enum.split_with(hooks, &(&1.type == :before_test_case))
+  end
+
+  defp hook_applies?(%{tag_expression: nil}, _tags), do: true
+  defp hook_applies?(%{tag_expression: expr}, tags), do: Cabbage.TagExpression.evaluate(expr, tags)
+
+  defp plan_hook_steps(hooks, hook_ids, ids) do
+    Enum.map_reduce(hooks, ids, fn hook, ids ->
+      {test_step_id, ids} = Ids.next(ids)
+      {%{id: test_step_id, kind: :hook, hook: hook, hook_id: hook_ids[hook]}, ids}
+    end)
+  end
+
+  defp plan_pickle_steps(pickle_steps, registry, def_ids, ids) do
+    Enum.map_reduce(pickle_steps, ids, fn pickle_step, ids ->
+      {test_step_id, ids} = Ids.next(ids)
+      matches = Matcher.matches(registry, pickle_step.text)
+
+      {%{
+         id: test_step_id,
+         kind: :step,
+         pickle_step: pickle_step,
+         matches: matches,
+         definition_ids: Enum.map(matches, fn m -> Map.fetch!(def_ids, m.definition) end)
+       }, ids}
+    end)
+  end
+
+  defp test_step_json(%{kind: :hook} = planned_step) do
+    %{"id" => planned_step.id, "hookId" => planned_step.hook_id}
+  end
+
+  defp test_step_json(%{kind: :step} = planned_step) do
     %{
       "id" => planned_step.id,
       "pickleStepId" => planned_step.pickle_step.id,
@@ -255,38 +425,48 @@ defmodule Cabbage.Messages do
     {test_case_started_id, ids} = Ids.next(ids)
     started = test_case_started_envelope(test_case_started_id, test_case.id, ids)
 
-    # Thread two skip-propagation flags across the scenario's steps (cucumber-js semantics,
-    # see the CCK `failedish-combinations` sample):
+    # Thread two skip-propagation flags across the scenario's Before hooks + steps
+    # (cucumber-js semantics, see the CCK `failedish-combinations` and `hooks-skipped`
+    # samples):
     #
-    #   * `failed_ish?`    — a prior step reported a non-PASSED status. This skips later
-    #                        *executable* steps (a single match that would run a def) but
-    #                        leaves UNDEFINED/AMBIGUOUS steps reporting their own status.
-    #   * `intrinsic_skip?` — a prior step's *intrinsic* status was SKIPPED (a `"skipped"`
-    #                        return or a raised `Cabbage.SkippedError`). A real skip
-    #                        cascades to *every* later step, even undefined/ambiguous ones.
+    #   * `failed_ish?`    — a prior step/hook reported a non-PASSED status. This skips later
+    #                        *executable* steps (a single match / a runnable hook) but leaves
+    #                        UNDEFINED/AMBIGUOUS steps reporting their own status.
+    #   * `intrinsic_skip?` — a prior step/hook's *intrinsic* status was SKIPPED (a `"skipped"`
+    #                        return or a raised `Cabbage.SkippedError`). A real skip cascades
+    #                        to *every* later step in this chain, even undefined/ambiguous ones.
+    #
+    # Before hooks and pickle steps share one skip chain; After hooks always run, each in its
+    # own fresh chain (a skipped/failing After does not cascade to later After hooks).
     acc0 = %{envelopes: [], world: %{}, failed_ish?: false, intrinsic_skip?: false, ids: ids}
 
     acc =
-      Enum.reduce(test_case.steps, acc0, fn planned_step, acc ->
-        execute_step(planned_step, test_case_started_id, acc)
+      Enum.reduce(test_case.before_hooks ++ test_case.steps, acc0, fn planned, acc ->
+        execute_step(planned, test_case_started_id, acc)
+      end)
+
+    acc =
+      Enum.reduce(test_case.after_hooks, acc, fn planned, acc ->
+        fresh = %{acc | failed_ish?: false, intrinsic_skip?: false}
+        execute_step(planned, test_case_started_id, fresh)
       end)
 
     finished = test_case_finished_envelope(test_case_started_id, acc.ids)
     {[started] ++ acc.envelopes ++ [finished], acc.ids}
   end
 
-  # Execute (or skip) one planned step, returning the updated accumulator.
-  defp execute_step(planned_step, test_case_started_id, acc) do
-    {intrinsic, new_world} = intrinsic_status(planned_step, acc.world)
+  # Execute (or skip) one planned step or hook, returning the updated accumulator.
+  defp execute_step(planned, test_case_started_id, acc) do
+    {intrinsic, new_world} = intrinsic_status(planned, acc.world)
     reported = report_status(intrinsic, acc)
 
     suggestions =
       if reported == :undefined,
-        do: suggestion_snippets(planned_step.pickle_step.text),
+        do: suggestion_snippets(planned.pickle_step.text),
         else: []
 
     {step_envelopes, ids} =
-      emit_step(planned_step, test_case_started_id, acc.ids, reported, suggestions)
+      emit_step(planned, test_case_started_id, acc.ids, reported, suggestions)
 
     %{
       acc
@@ -298,9 +478,12 @@ defmodule Cabbage.Messages do
     }
   end
 
+  # The status a hook would have *on its own* — hooks have no match concept, they just run.
+  defp intrinsic_status(%{kind: :hook} = planned, world), do: run_hook(planned.hook, [], world)
+
   # The status a step would have *on its own*, ignoring prior steps: UNDEFINED when no
   # definition matches, AMBIGUOUS when more than one does, otherwise the run result.
-  defp intrinsic_status(planned_step, world) do
+  defp intrinsic_status(%{kind: :step} = planned_step, world) do
     case planned_step.matches do
       [] -> {:undefined, world}
       [match] -> run_step(match, planned_step.pickle_step, world)
@@ -333,7 +516,21 @@ defmodule Cabbage.Messages do
   defp run_step(match, pickle_step, world) do
     step_argument = step_argument(pickle_step)
     result = apply_step_fun(match.definition.fun, match.values, step_argument, world)
+    classify_outcome(result, world)
+  rescue
+    error -> rescue_outcome(error, world)
+  end
 
+  # A hook runs its 0..3-arity function the same way a step does (no match args / step
+  # argument), and maps its return/raise through the same outcome protocol.
+  defp run_hook(hook, args, world) do
+    result = apply_step_fun(hook.fun, args, nil, world)
+    classify_outcome(result, world)
+  rescue
+    error -> rescue_outcome(error, world)
+  end
+
+  defp classify_outcome(result, world) do
     case result do
       "pending" -> {:pending, world}
       :pending -> {:pending, world}
@@ -342,12 +539,16 @@ defmodule Cabbage.Messages do
       {:ok, new_world} when is_map(new_world) -> {:passed, new_world}
       _ -> {:passed, world}
     end
-  rescue
-    # Dedicated pending/skip exceptions carry the reference type names so the message
-    # stream distinguishes "pending via exception" from "pending via return value".
-    _error in Cabbage.PendingError -> {{:pending, "PendingException"}, world}
-    _error in Cabbage.SkippedError -> {{:skipped, "SkippedException"}, world}
-    error -> {{:failed, exception_type(error)}, world}
+  end
+
+  # Dedicated pending/skip exceptions carry the reference type names so the message stream
+  # distinguishes "pending via exception" from "pending via return value".
+  defp rescue_outcome(error, world) do
+    case error do
+      %Cabbage.PendingError{} -> {{:pending, "PendingException"}, world}
+      %Cabbage.SkippedError{} -> {{:skipped, "SkippedException"}, world}
+      _ -> {{:failed, exception_type(error)}, world}
+    end
   end
 
   # Map an Elixir exception to the cucumber-messages `exception.type` the goldens carry.
@@ -457,18 +658,21 @@ defmodule Cabbage.Messages do
   end
 
   defp test_step_finished_envelope(test_case_started_id, test_step_id, status, ids) do
-    result =
-      %{"status" => status_string(status), "duration" => timestamp(0)}
-      |> maybe_put_exception(status)
-
     %{
       "testStepFinished" => %{
         "testCaseStartedId" => test_case_started_id,
         "testStepId" => test_step_id,
-        "testStepResult" => result,
+        "testStepResult" => step_result(status),
         "timestamp" => timestamp(Ids.tick(ids))
       }
     }
+  end
+
+  # A cucumber-messages `TestStepResult`/`Hook` result: a status, a (dropped) duration, and
+  # an optional `exception` (present for failures and exception-raised pending/skipped).
+  defp step_result(status) do
+    %{"status" => status_string(status), "duration" => timestamp(0)}
+    |> maybe_put_exception(status)
   end
 
   # Failed steps, and pending/skipped raised *via an exception*, carry an `exception`
