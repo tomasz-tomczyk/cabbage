@@ -43,6 +43,47 @@ defmodule Cabbage.CucumberExpression.TreeRegexp do
     end
   end
 
+  @doc """
+  Like `match/2`, but each group also carries its `:start` offset (the byte index of
+  the captured substring in `text`, or `nil` when the group did not participate).
+
+  Used by `Cabbage.Messages` to build cucumber-messages `stepMatchArguments`, which
+  require both the matched value and its start position. For ASCII source text the
+  byte offset equals the character offset the cucumber-messages goldens expect.
+  """
+  @spec match_with_index(%TreeRegexp{}, String.t()) :: group() | nil
+  def match_with_index(%TreeRegexp{regex: regex, group_builder: gb}, text) do
+    case Regex.run(regex, text, return: :index) do
+      nil ->
+        nil
+
+      indices ->
+        indexed = indices |> Enum.map(&located(&1, text)) |> List.to_tuple()
+        {group, _next} = build_located_group(gb, indexed, 0)
+        group
+    end
+  end
+
+  defp located({start, _len}, _text) when start < 0, do: %{start: nil, value: nil}
+  defp located({start, len}, text), do: %{start: start, value: binary_part(text, start, len)}
+
+  defp build_located_group(builder, indexed, group_index) do
+    %{start: start, value: value} = located_or_nil(indexed, group_index)
+
+    {children, next_index} =
+      Enum.reduce(builder.children, {[], group_index + 1}, fn child, {acc, idx} ->
+        {child_group, new_idx} = build_located_group(child, indexed, idx)
+        {[child_group | acc], new_idx}
+      end)
+
+    children = Enum.reverse(children)
+    group = %{start: start, value: value, children: if(children == [], do: nil, else: children)}
+    {group, next_index}
+  end
+
+  defp located_or_nil(tuple, idx) when idx < tuple_size(tuple), do: elem(tuple, idx)
+  defp located_or_nil(_tuple, _idx), do: %{start: nil, value: nil}
+
   defp slice({start, _len}, _text) when start < 0, do: nil
   defp slice({start, len}, text), do: binary_part(text, start, len)
 
