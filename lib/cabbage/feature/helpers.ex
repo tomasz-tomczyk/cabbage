@@ -92,7 +92,11 @@ defmodule Cabbage.Feature.Helpers do
     |> Agent.update(fun)
   end
 
-  def run_tag(tags, tag, module, scenario_name) do
+  # Cabbage `tag` blocks are keyed by an atom/binary name. ExUnit-style valued tags
+  # (e.g. `@moduletag timeout: 100`, which reaches here as `[timeout: 100]` or
+  # `{:timeout, 100}`) are not cabbage tag blocks — they configure ExUnit, not
+  # cabbage state — so we ignore anything that isn't a plain atom/binary name.
+  def run_tag(tags, tag, module, scenario_name) when is_atom(tag) or is_binary(tag) do
     string_tag = to_string(tag)
 
     case Enum.find(tags, &match?({^string_tag, _}, &1)) do
@@ -106,6 +110,8 @@ defmodule Cabbage.Feature.Helpers do
         nil
     end
   end
+
+  def run_tag(_tags, _tag, _module, _scenario_name), do: nil
 
   def map_tags(tags) do
     tags
