@@ -121,17 +121,39 @@ defmodule Cabbage.Feature do
       end
 
   Keep in mind that if you'd like to be more explicit about what you bring into your test, you can use the macros `import_steps/1` and `import_tags/1`. This will allow you to be more selective about whats getting included into your integration tests. The `import_feature/1` macro simply calls both the `import_steps/1` and `import_tags/1` macros.
+
+  ## Options
+
+  `use Cabbage.Feature` accepts:
+
+    * `:file` — the `.feature` file to generate scenarios from;
+    * `:template` — the case template to `use` instead of `ExUnit.Case`;
+    * `:on_ambiguous_step` — how to react at compile time when more than one registered
+      step definition matches a scenario step. One of:
+      * `:ignore` (default) — first-match-wins, silently. Preserves the historical
+        behaviour where a general pattern plus a specific override is resolved by picking
+        the first match (which, because step definitions accumulate, is the *last*
+        textually-written matching `defgiven`/`defwhen`/`defthen`).
+      * `:warn` — emit a compile warning naming the ambiguous step, then still first-match-wins.
+      * `:raise` — abort compilation with a `CompileError`.
   """
   import Cabbage.Feature.Helpers
 
   alias Cabbage.Feature.{Loader, MissingStepError}
 
-  @feature_options [:file, :template]
+  @feature_options [:file, :template, :on_ambiguous_step]
+
+  # How the compile-time step matcher reacts when more than one registered step pattern
+  # matches a scenario step. `:ignore` (the default) preserves the historical first-match-wins
+  # behaviour; `:warn` emits a compile warning and still picks the first match; `:raise` aborts
+  # compilation. Opt in via `use Cabbage.Feature, on_ambiguous_step: :warn`.
+  @on_ambiguous_step_values [:ignore, :warn, :raise]
   defmacro __using__(options) do
     has_assigned_feature = !match?(nil, options[:file])
 
     Module.register_attribute(__CALLER__.module, :steps, accumulate: true)
     Module.register_attribute(__CALLER__.module, :tags, accumulate: true)
+    Module.put_attribute(__CALLER__.module, :on_ambiguous_step, validate_on_ambiguous_step!(options))
 
     quote do
       unquote(prepare_executable_feature(has_assigned_feature, options))
@@ -141,6 +163,18 @@ defmodule Cabbage.Feature do
       require Logger
 
       unquote(load_features(has_assigned_feature, options))
+    end
+  end
+
+  defp validate_on_ambiguous_step!(options) do
+    case Keyword.get(options, :on_ambiguous_step, :ignore) do
+      value when value in @on_ambiguous_step_values ->
+        value
+
+      other ->
+        raise ArgumentError,
+              "invalid :on_ambiguous_step #{inspect(other)} passed to `use Cabbage.Feature`; " <>
+                "expected one of #{inspect(@on_ambiguous_step_values)}"
     end
   end
 
@@ -183,6 +217,9 @@ defmodule Cabbage.Feature do
     scenarios = Module.get_attribute(env.module, :scenarios) || []
     steps = Module.get_attribute(env.module, :steps) || []
     tags = Module.get_attribute(env.module, :tags) || []
+    on_ambiguous_step = Module.get_attribute(env.module, :on_ambiguous_step) || :ignore
+
+    check_ambiguous_steps(scenarios, steps, on_ambiguous_step, env)
 
     scenarios
     |> Enum.map(fn scenario ->
@@ -315,6 +352,54 @@ defmodule Cabbage.Feature do
     Enum.find(steps, fn {:{}, _, [r, _, _, _, _]} ->
       step.text =~ r |> Code.eval_quoted() |> elem(0)
     end)
+  end
+
+  # All registered step definitions whose regex matches `step.text`. `find_implementation_of_step/2`
+  # picks the FIRST of these (first-match-wins); this enumerates them for the opt-in ambiguity
+  # check, which only cares whether there is more than one.
+  defp matching_implementations_of_step(step, steps) do
+    Enum.filter(steps, fn {:{}, _, [r, _, _, _, _]} ->
+      step.text =~ r |> Code.eval_quoted() |> elem(0)
+    end)
+  end
+
+  # Opt-in compile-time ambiguity detection. `find_implementation_of_step/2` is silently
+  # first-match-wins; some feature modules rely on that (a general pattern plus a specific
+  # override), so the default is `:ignore` to preserve all shipped behaviour. `:warn` and
+  # `:raise` surface the cases where more than one registered pattern matches a scenario step.
+  defp check_ambiguous_steps(_scenarios, _steps, :ignore, _env), do: :ok
+
+  defp check_ambiguous_steps(scenarios, steps, on_ambiguous, env) when on_ambiguous in [:warn, :raise] do
+    for scenario <- scenarios, step <- scenario.steps do
+      case matching_implementations_of_step(step, steps) do
+        matches when length(matches) > 1 ->
+          report_ambiguous_step(step, matches, on_ambiguous, env)
+
+        _ ->
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp report_ambiguous_step(step, matches, on_ambiguous, env) do
+    patterns =
+      matches
+      |> Enum.map(fn {:{}, _, [r, _, _, _, _]} ->
+        {regex, _} = Code.eval_quoted(r)
+        "    " <> inspect(Regex.source(regex))
+      end)
+      |> Enum.join("\n")
+
+    message =
+      "Ambiguous step #{inspect(step.text)}: #{length(matches)} registered step definitions " <>
+        "match it (first-match-wins picks the first):\n#{patterns}"
+
+    case on_ambiguous do
+      :warn -> IO.warn(message, Macro.Env.stacktrace(env))
+      :raise -> raise CompileError, description: message, file: env.file, line: env.line
+    end
   end
 
   defp extract_named_vars(regex, step_text) do
