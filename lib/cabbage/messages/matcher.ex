@@ -39,6 +39,10 @@ defmodule Cabbage.Messages.Matcher do
     end)
   end
 
+  # An :undefined definition references an unregistered parameter type; it never matches,
+  # so the step is reported UNDEFINED (and the runner emits an undefinedParameterType message).
+  defp match_one(%StepDefinition{pattern_kind: :undefined}, _text), do: nil
+
   defp match_one(%StepDefinition{pattern_kind: :cucumber_expression, compiled: expr} = def, text) do
     %CucumberExpression{tree_regexp: tree, parameter_types: types} = expr
 

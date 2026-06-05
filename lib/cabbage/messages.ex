@@ -124,7 +124,12 @@ defmodule Cabbage.Messages do
     # parser-side envelopes keep document order.
     pickles = if run_opts[:order] == :reverse, do: Enum.reverse(pickles), else: pickles
 
-    # 2. StepDefinition envelopes (one per registered definition, registration order).
+    # 2. Registration-side envelopes: custom parameterType messages (each consumes an id),
+    # then undefinedParameterType messages (no id), then a stepDefinition per *defined*
+    # step definition. Undefined defs (an unregistered `{type}`) emit no stepDefinition.
+    {parameter_type_envelopes, ids} = parameter_type_envelopes(registry, ids)
+    undefined_parameter_type_envelopes = undefined_parameter_type_envelopes(registry)
+
     {step_def_envelopes, def_ids} = step_definition_envelopes(registry, ids)
     ids = def_ids.ids
 
@@ -149,6 +154,8 @@ defmodule Cabbage.Messages do
     success = run_success?(execution_envelopes)
 
     parser_envelopes ++
+      parameter_type_envelopes ++
+      undefined_parameter_type_envelopes ++
       step_def_envelopes ++
       [test_run_started] ++
       test_case_envelopes ++
@@ -160,12 +167,49 @@ defmodule Cabbage.Messages do
   @spec to_ndjson([envelope()]) :: String.t()
   def to_ndjson(envelopes), do: Message.to_ndjson(envelopes)
 
+  # ---- ParameterType / UndefinedParameterType envelopes ----------------------
+
+  # One `parameterType` message per *custom* (suite-registered) parameter type, in
+  # registration order; each consumes an id. Built-in types are not surfaced.
+  defp parameter_type_envelopes(registry, ids) do
+    registry
+    |> StepRegistry.parameter_types()
+    |> Enum.map_reduce(ids, fn type, ids ->
+      {id, ids} = Ids.next(ids)
+      {parameter_type_envelope(type, id), ids}
+    end)
+  end
+
+  defp parameter_type_envelope(type, id) do
+    %{
+      "parameterType" => %{
+        "id" => id,
+        "name" => type.name,
+        "regularExpressions" => type.regexps,
+        "preferForRegularExpressionMatch" => type.prefer_for_regexp_match,
+        "useForSnippets" => type.use_for_snippets,
+        "sourceReference" => source_reference(type)
+      }
+    }
+  end
+
+  # One `undefinedParameterType` message per step definition that referenced an
+  # unregistered `{type}`. These carry no id (matching the reference stream).
+  defp undefined_parameter_type_envelopes(registry) do
+    registry
+    |> StepRegistry.undefined_parameter_types()
+    |> Enum.map(fn %{name: name, expression: expression} ->
+      %{"undefinedParameterType" => %{"name" => name, "expression" => expression}}
+    end)
+  end
+
   # ---- StepDefinition envelopes ----------------------------------------------
 
   defp step_definition_envelopes(registry, ids) do
     {envelopes_and_ids, ids} =
       registry
       |> StepRegistry.definitions()
+      |> Enum.reject(&(&1.pattern_kind == :undefined))
       |> Enum.map_reduce(ids, fn definition, ids ->
         {id, ids} = Ids.next(ids)
         {{definition, id, step_definition_envelope(definition, id)}, ids}
