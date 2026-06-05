@@ -5,23 +5,24 @@ defmodule Cabbage.Mixfile do
 
   def project do
     [
+      # NOTE: hex package name / OTP app name kept as `:cabbage` for now — a rename is
+      # deferred to a later release so existing `{:cabbage, ...}` deps keep resolving.
       app: :cabbage,
       version: @version,
-      elixir: "~> 1.15",
-      source_url: "git@github.com:cabbage-ex/cabbage.git",
-      homepage_url: "https://github.com/cabbage-ex/cabbage",
+      elixir: "~> 1.18",
+      source_url: "https://github.com/tomasz-tomczyk/cabbage",
+      homepage_url: "https://github.com/tomasz-tomczyk/cabbage",
       elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
-      description: "Story BDD tool for executing elixir in ExUnit",
+      description: "A spec-conformant Cucumber runner for Elixir on top of the gherkin fork",
       docs: [
         main: Cabbage,
         readme: "README.md"
       ],
       package: package(),
       deps: deps(),
-      aliases: aliases(),
-      test_coverage: [tool: ExCoveralls]
+      aliases: aliases()
     ]
   end
 
@@ -62,9 +63,10 @@ defmodule Cabbage.Mixfile do
   # Type "mix help deps" for more examples and options
   defp deps do
     [
+      # Only runtime dependency: the gherkin fork (which is itself jason-free). Coverage
+      # uses the built-in `mix test --cover`, so no `excoveralls`/`jason` is pulled in.
       {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "master"},
-      {:ex_doc, "~> 0.19", only: :dev},
-      {:excoveralls, "~> 0.10", only: :test}
+      {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end
 
@@ -72,7 +74,7 @@ defmodule Cabbage.Mixfile do
     [
       maintainers: ["Matt Widmann", "Steve B", "Max Marcon"],
       licenses: ["MIT"],
-      links: %{github: "https://github.com/cabbage-ex/cabbage"}
+      links: %{"GitHub" => "https://github.com/tomasz-tomczyk/cabbage"}
     ]
   end
 
