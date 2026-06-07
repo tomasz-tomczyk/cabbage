@@ -5,6 +5,12 @@ This directory vendors sample data from the
 used by `mix conformance.cck` to verify the message-emitting runner (`Cabbage.Messages`)
 against the canonical cucumber-messages goldens.
 
+## License
+
+The vendored corpus (the `data/` inputs/goldens and the `reference/` `.ts` step
+definitions) is from `cucumber/compatibility-kit`, licensed MIT. The upstream
+license text is preserved verbatim in [`LICENSE.upstream`](LICENSE.upstream).
+
 ## Pin
 
 | | |

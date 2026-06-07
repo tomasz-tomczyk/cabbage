@@ -10,6 +10,7 @@ green scoreboard here means byte-for-byte parity with the reference behaviour.
 - Upstream: https://github.com/cucumber/tag-expressions
 - Commit SHA: `28a5e5e97900b8e6e13d4517a2f24337c6c686fd`
 - Source files: `testdata/parsing.yml`, `testdata/evaluations.yml`, `testdata/errors.yml`
+- License: MIT (from `cucumber/tag-expressions`); upstream text preserved in [`LICENSE.upstream`](LICENSE.upstream).
 
 ## Conversion
 

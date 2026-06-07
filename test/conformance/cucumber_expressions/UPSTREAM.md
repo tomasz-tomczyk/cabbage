@@ -6,6 +6,7 @@ Cucumber Expressions test suite and converted from YAML to JSON at vendor time.
 - Source: https://github.com/cucumber/cucumber-expressions
 - Upstream commit: `0555a711a741421ca31255f16b3c5a97625d20d2`
 - Vendored: 2026-06-05
+- License: MIT (from `cucumber/cucumber-expressions`); upstream text preserved in [`LICENSE.upstream`](LICENSE.upstream).
 
 ## Conversion
 
