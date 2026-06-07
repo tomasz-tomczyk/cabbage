@@ -1,7 +1,7 @@
 defmodule Cabbage.Mixfile do
   use Mix.Project
 
-  @version "0.4.1"
+  @version "1.0.0"
 
   def project do
     [
@@ -65,6 +65,7 @@ defmodule Cabbage.Mixfile do
     [
       # Only runtime dependency: the gherkin fork (which is itself jason-free). Coverage
       # uses the built-in `mix test --cover`, so no `excoveralls`/`jason` is pulled in.
+      # RELEASE: replace with {:gherkin, "~> 3.0"} once gherkin 3.0.0 is published to hex (see RELEASING.md).
       {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "master"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
