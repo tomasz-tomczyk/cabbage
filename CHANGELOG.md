@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **`Cabbage.Formatter` — an ExUnit formatter that emits a cucumber-messages
+  NDJSON stream from a normal `mix test` run.** Enable it alongside the default
+  CLI formatter:
+
+      ExUnit.start(formatters: [ExUnit.CLIFormatter, Cabbage.Formatter])
+
+  For every `Cabbage.Feature` scenario it writes `meta`, per-feature
+  `source`/`gherkinDocument`/`pickle`, `testRunStarted`, and per-scenario
+  `testCase`/`testCaseStarted`/`testStepStarted`/`testStepFinished`/`testCaseFinished`,
+  closing with `testRunFinished` whose `success` flag reflects the run. Output
+  defaults to `cucumber-messages.ndjson` and is configurable via
+  `config :cabbage, messages_output: "path.ndjson"` or the formatter's
+  `:messages_output` option. The parser-side envelopes reuse the gherkin
+  dependency's `Gherkin.Message` builders.
+  - **Step results are scenario-level.** Because cabbage runs every step inside one
+    generated ExUnit test, each step is attributed the scenario's outcome uniformly
+    (all `PASSED`, all `FAILED`, or all `SKIPPED`); the run-level `success` flag is
+    exact. Granular per-step attribution is a planned follow-up.
+
 ### Changed
 
 - **Scenario state is now threaded as a value, not held in an `Agent`.** The

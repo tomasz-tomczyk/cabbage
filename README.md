@@ -142,6 +142,21 @@ Feature files are translated to ExUnit at compile time, so target the `.exs` fil
 mix test test/feature_test.exs:13
 ```
 
+### Emitting cucumber-messages
+
+`Cabbage.Formatter` is an ExUnit formatter that writes a
+[cucumber-messages](https://github.com/cucumber/messages) NDJSON stream as your scenarios
+run. Add it alongside the default formatter in `test/test_helper.exs`:
+
+```elixir
+ExUnit.start(formatters: [ExUnit.CLIFormatter, Cabbage.Formatter])
+```
+
+The stream is written to `cucumber-messages.ndjson` by default; configure the path with
+`config :cabbage, messages_output: "path.ndjson"` or the formatter's `:messages_output`
+option. See `Cabbage.Formatter` for the emitted envelope types and the scenario-level
+step-result semantics.
+
 ## Developing
 
 Run the test suite and the conformance gates:

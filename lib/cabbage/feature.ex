@@ -201,6 +201,7 @@ defmodule Cabbage.Feature do
   defmacro expose_metadata(env) do
     steps = Module.get_attribute(env.module, :steps) || []
     tags = Module.get_attribute(env.module, :tags) || []
+    feature = Module.get_attribute(env.module, :feature)
 
     quote generated: true do
       def raw_steps() do
@@ -209,6 +210,14 @@ defmodule Cabbage.Feature do
 
       def raw_tags() do
         unquote(Macro.escape(tags))
+      end
+
+      # The loaded `Cabbage.Feature.Loader` document this module's scenarios were
+      # generated from (or `nil` for a file-less step library). Read by
+      # `Cabbage.Formatter` to emit per-feature source/gherkinDocument/pickle envelopes;
+      # additive accessor only — it does not affect scenario execution.
+      def __cabbage_document__() do
+        unquote(Macro.escape(feature))
       end
     end
   end
