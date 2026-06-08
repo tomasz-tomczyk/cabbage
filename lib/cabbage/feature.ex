@@ -238,31 +238,15 @@ defmodule Cabbage.Feature do
             line: scenario.line do
         describe scenario.name do
           setup context do
-            for tag <- unquote(scenario.tags) do
-              case tag do
-                {tag, _value} ->
-                  Cabbage.Feature.Helpers.run_tag(
-                    unquote(Macro.escape(tags)),
-                    tag,
-                    __MODULE__,
-                    unquote(scenario.name)
-                  )
+            # Tag blocks contribute initial state purely (no process); ExUnit's own context
+            # is layered on top so a `setup`/`setup_all` value can override a tag default.
+            tag_state =
+              Cabbage.Feature.Helpers.collect_tag_state(
+                unquote(Macro.escape(tags)),
+                unquote(scenario.tags)
+              )
 
-                tag ->
-                  Cabbage.Feature.Helpers.run_tag(
-                    unquote(Macro.escape(tags)),
-                    tag,
-                    __MODULE__,
-                    unquote(scenario.name)
-                  )
-              end
-            end
-
-            {:ok,
-             Map.merge(
-               Cabbage.Feature.Helpers.fetch_state(unquote(scenario.name), __MODULE__),
-               Cabbage.Feature.Helpers.to_map(context)
-             )}
+            {:ok, Map.merge(tag_state, Cabbage.Feature.Helpers.to_map(context))}
           end
 
           tags = Cabbage.Feature.Helpers.map_tags(scenario.tags) || []
@@ -271,9 +255,16 @@ defmodule Cabbage.Feature do
             Cabbage.Feature.Helpers.register_test(__ENV__, :scenario, scenario.name, tags)
 
           def unquote(name)(exunit_state) do
-            Cabbage.Feature.Helpers.start_state(unquote(scenario.name), __MODULE__, exunit_state)
+            # Each step is compiled to a `fn context -> next_context end`; we thread the scenario
+            # state through them with a plain reduce. No process, no shared variable — state is a
+            # value passed step-to-step, which is what makes `async: true` safe by construction.
+            Enum.reduce(
+              unquote(Enum.map(scenario.steps, &compile_step(&1, steps))),
+              Cabbage.Feature.Helpers.init_context(exunit_state),
+              fn step_fun, context -> step_fun.(context) end
+            )
 
-            unquote(Enum.map(scenario.steps, &compile_step(&1, steps, scenario.name)))
+            :ok
           end
         end
       end
@@ -281,25 +272,27 @@ defmodule Cabbage.Feature do
   end
 
   @doc """
-  Compiles a single Gherkin `step` into the quoted ExUnit expression that runs it.
+  Compiles a single Gherkin `step` into a quoted `fn context -> next_context end`.
 
   Used at compile time by `__before_compile__/1`; `steps` is the list of registered step
-  definition ASTs and `scenario_name` scopes the generated state lookups.
+  definition ASTs. The returned function receives the current scenario state, runs the matched
+  step block, and returns the next state — `Map.merge`d with the step's `{:ok, delta}` return
+  (or unchanged for any other return). `__before_compile__/1` threads these functions with a
+  reduce, so scenario state is a plain value rather than process state.
   """
-  @spec compile_step(struct(), [Macro.t()], String.t()) :: Macro.t()
-  def compile_step(step, steps, scenario_name) when is_list(steps) do
+  @spec compile_step(struct(), [Macro.t()]) :: Macro.t()
+  def compile_step(step, steps) when is_list(steps) do
     step_type = step.keyword
 
     step
     |> find_implementation_of_step(steps)
-    |> compile(step, step_type, scenario_name)
+    |> compile(step, step_type)
   end
 
   defp compile(
          {:{}, _, [regex, vars, state_pattern, block, metadata]},
          step,
-         step_type,
-         scenario_name
+         step_type
        ) do
     {regex, _} = Code.eval_quoted(regex)
 
@@ -308,41 +301,40 @@ defmodule Cabbage.Feature do
       |> Map.merge(%{table: step.table_data, doc_string: step.doc_string})
 
     quote generated: true do
-      with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(named_vars))},
-           {_type, state = unquote(state_pattern)} <-
-             {:state, Cabbage.Feature.Helpers.fetch_state(unquote(scenario_name), __MODULE__)} do
-        new_state =
-          case unquote(block) do
-            {:ok, new_state} -> Map.merge(state, new_state)
-            _ -> state
-          end
+      fn context ->
+        with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(named_vars))},
+             {_type, state = unquote(state_pattern)} <- {:state, context} do
+          new_state =
+            case unquote(block) do
+              {:ok, new_state} -> Map.merge(state, new_state)
+              _ -> state
+            end
 
-        Cabbage.Feature.Helpers.update_state(unquote(scenario_name), __MODULE__, fn _ ->
+          Logger.info([
+            "\t\t",
+            IO.ANSI.cyan(),
+            unquote(step_type),
+            " ",
+            IO.ANSI.green(),
+            unquote(step.text)
+          ])
+
           new_state
-        end)
+        else
+          {type, value} ->
+            metadata = unquote(Macro.escape(metadata))
 
-        Logger.info([
-          "\t\t",
-          IO.ANSI.cyan(),
-          unquote(step_type),
-          " ",
-          IO.ANSI.green(),
-          unquote(step.text)
-        ])
-      else
-        {type, state} ->
-          metadata = unquote(Macro.escape(metadata))
-
-          reraise """
-                  ** (MatchError) Failure to match #{type} of #{inspect(Cabbage.Feature.Helpers.remove_hidden_state(state))}
-                  Pattern: #{unquote(Macro.to_string(state_pattern))}
-                  """,
-                  Cabbage.Feature.Helpers.stacktrace(__MODULE__, metadata)
+            reraise """
+                    ** (MatchError) Failure to match #{type} of #{inspect(Cabbage.Feature.Helpers.remove_hidden_state(value))}
+                    Pattern: #{unquote(Macro.to_string(state_pattern))}
+                    """,
+                    Cabbage.Feature.Helpers.stacktrace(__MODULE__, metadata)
+        end
       end
     end
   end
 
-  defp compile(_, step, step_type, _scenario_name) do
+  defp compile(_, step, step_type) do
     extra_vars = %{table: step.table_data, doc_string: step.doc_string}
 
     raise MissingStepError, step_text: step.text, step_type: step_type, extra_vars: extra_vars

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Scenario state is now threaded as a value, not held in an `Agent`.** The
+  `Feature` runner compiles each step to a `fn context -> next_context end` and
+  threads the scenario's state through them with a reduce. Previously state lived
+  in a per-scenario `Agent` registered under a global name.
+  - **`async: true` is now safe by construction.** The old global Agent name
+    (`cabbage_integration_test-<scenario>-<module>`) could collide and leak state
+    between same-named scenarios / re-runs; threaded state is per-invocation.
+  - **No more leaked processes.** The Agent was started and never stopped.
+  - The public step API is **unchanged**: `defgiven/defwhen/defthen(regex, vars,
+    state, do: block)`, the `{:ok, delta}` merge return, assertion-only steps that
+    return nothing, tags, `setup`/`setup_all` seeding, data tables and doc strings
+    all behave exactly as before.
+
+### Breaking
+
+- **Removed the internal state helpers** `Cabbage.Feature.Helpers.start_state/3`,
+  `fetch_state/2`, `update_state/3`, and `agent_name/2` (the module is
+  `@moduledoc false`). Step code never called these; only code reaching into
+  cabbage internals or relying on the per-scenario Agent process is affected.
+
 ## 1.0.0 - 2026-06-05
 
 Cabbage graduates to `1.0.0`. The internals are a ground-up rewrite onto a

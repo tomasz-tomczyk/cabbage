@@ -81,59 +81,47 @@ defmodule Cabbage.Feature.Helpers do
     ]
   end
 
-  def agent_name(scenario_name, module_name) do
-    :"cabbage_integration_test-#{scenario_name}-#{module_name}"
-  end
-
   @keys ~w(async case describe file integration line test type scenario case_templae registered)a
   def remove_hidden_state(state) do
     Map.drop(state, @keys)
   end
 
-  def start_state(scenario_name, module_name, state) do
-    name = scenario_name |> agent_name(module_name)
-    agent = Process.whereis(name)
+  @doc false
+  # Normalizes the ExUnit `setup` context into a scenario's starting state map, dropping the
+  # ExUnit/cabbage bookkeeping keys that should never be visible to a step's state pattern.
+  def init_context(exunit_state) do
+    exunit_state |> to_map() |> remove_hidden_state()
+  end
 
-    if agent do
-      update_state(scenario_name, module_name, fn s ->
-        Map.merge(s, state) |> remove_hidden_state()
-      end)
-    else
-      Agent.start(fn -> state end, name: name)
+  @doc false
+  # Folds a scenario's tags through the module's registered `tag` blocks and returns the merged
+  # state map they contribute. Pure (no process) — replaces the Agent-seeding `run_tag/4`; the
+  # result is merged into the scenario's initial context by the generated `setup` block.
+  def collect_tag_state(tags, scenario_tags) do
+    for tag <- scenario_tags, reduce: %{} do
+      acc -> Map.merge(acc, tag_state(tags, tag))
     end
   end
 
-  def fetch_state(scenario_name, module_name) do
-    name = scenario_name |> agent_name(module_name)
-    ((Process.whereis(name) && Agent.get(name, & &1)) || %{}) |> remove_hidden_state()
-  end
-
-  def update_state(scenario_name, module_name, fun) do
-    scenario_name
-    |> agent_name(module_name)
-    |> Agent.update(fun)
-  end
-
   # Cabbage `tag` blocks are keyed by an atom/binary name. ExUnit-style valued tags
-  # (e.g. `@moduletag timeout: 100`, which reaches here as `[timeout: 100]` or
-  # `{:timeout, 100}`) are not cabbage tag blocks — they configure ExUnit, not
-  # cabbage state — so we ignore anything that isn't a plain atom/binary name.
-  def run_tag(tags, tag, module, scenario_name) when is_atom(tag) or is_binary(tag) do
+  # (e.g. `@moduletag timeout: 100`, which reaches here as `{:timeout, 100}`) are not cabbage
+  # tag blocks — they configure ExUnit, not cabbage state — so they contribute no state.
+  defp tag_state(tags, {tag, _value}), do: tag_state(tags, tag)
+
+  defp tag_state(tags, tag) when is_atom(tag) or is_binary(tag) do
     string_tag = to_string(tag)
 
     case Enum.find(tags, &match?({^string_tag, _}, &1)) do
       {^string_tag, block} ->
         Logger.debug("Cabbage: Running tag @#{tag}...")
-        state = evaluate_tag_block(block)
-        start_state(scenario_name, module, state)
+        evaluate_tag_block(block)
 
       _ ->
-        # Nothing to do
-        nil
+        %{}
     end
   end
 
-  def run_tag(_tags, _tag, _module, _scenario_name), do: nil
+  defp tag_state(_tags, _tag), do: %{}
 
   def map_tags(tags) do
     tags
