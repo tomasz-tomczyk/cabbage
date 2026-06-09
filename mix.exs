@@ -8,8 +8,8 @@ defmodule Cabbage.Mixfile do
       app: :cabbage,
       version: @version,
       elixir: "~> 1.18",
-      source_url: "https://github.com/tomasz-tomczyk/cabbage",
-      homepage_url: "https://github.com/tomasz-tomczyk/cabbage",
+      source_url: "https://github.com/cabbage-ex/cabbage",
+      homepage_url: "https://github.com/cabbage-ex/cabbage",
       elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
@@ -63,8 +63,10 @@ defmodule Cabbage.Mixfile do
     [
       # Only runtime dependency: the gherkin fork (which is itself jason-free). Coverage
       # uses the built-in `mix test --cover`, so no `excoveralls`/`jason` is pulled in.
+      # Points at the gherkin 3.0 proposal branch (cabbage-ex/gherkin#23, on the `next`
+      # fork branch) so this builds before that PR merges.
       # RELEASE: replace with {:gherkin, "~> 3.0"} once gherkin 3.0.0 is published to hex (see RELEASING.md).
-      {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "master"},
+      {:gherkin, git: "https://github.com/tomasz-tomczyk/gherkin.git", branch: "next"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end
@@ -73,7 +75,7 @@ defmodule Cabbage.Mixfile do
     [
       maintainers: ["Matt Widmann", "Steve B", "Max Marcon"],
       licenses: ["MIT"],
-      links: %{"GitHub" => "https://github.com/tomasz-tomczyk/cabbage"}
+      links: %{"GitHub" => "https://github.com/cabbage-ex/cabbage"}
     ]
   end
 
