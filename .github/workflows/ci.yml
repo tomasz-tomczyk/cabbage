@@ -20,16 +20,14 @@ jobs:
             otp: "27.0.1"
           - elixir: "1.19.5"
             otp: "28.1"
-          # 1.20 is still a release candidate; it brings the set-theoretic type
-          # checker, which `mix compile --warnings-as-errors` exercises below.
-          - elixir: "1.20.0-rc.6"
+          - elixir: "1.20.1"
             otp: "27.0.1"
 
     env:
       MIX_ENV: test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Elixir / OTP
         uses: erlef/setup-beam@v1
@@ -39,7 +37,7 @@ jobs:
           version-type: strict
 
       - name: Restore deps and _build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             deps

@@ -9,7 +9,7 @@ defmodule Cabbage.CucumberExpression do
 
   Pipeline: `tokenize -> parse -> rewrite AST to regex -> match`.
 
-  Ported from cucumber/cucumber-expressions. See `cabbage-ex/cabbage#47`.
+  Ported from cucumber/cucumber-expressions.
 
       iex> registry = Cabbage.CucumberExpression.ParameterTypeRegistry.new()
       iex> expr = Cabbage.CucumberExpression.compile("I have {int} cukes", registry)

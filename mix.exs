@@ -5,8 +5,6 @@ defmodule Cabbage.Mixfile do
 
   def project do
     [
-      # NOTE: hex package name / OTP app name kept as `:cabbage` for now — a rename is
-      # deferred to a later release so existing `{:cabbage, ...}` deps keep resolving.
       app: :cabbage,
       version: @version,
       elixir: "~> 1.18",

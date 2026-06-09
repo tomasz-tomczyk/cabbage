@@ -10,53 +10,6 @@ developers maintain ordinary Elixir step definitions. It parses Gherkin with the
 [gherkin fork](https://github.com/tomasz-tomczyk/gherkin) and also ships a message-emitting
 interpreter that is graded against the official Cucumber test kits.
 
-## Conformance
-
-This fork is verified against the upstream Cucumber suites:
-
-| Suite | Score |
-| --- | --- |
-| Cucumber Compatibility Kit (CCK) | **43 / 44** |
-| Cucumber Expressions | **115 / 115** |
-| Tag Expressions | **64 / 64** |
-
-The scoreboards are reproducible locally:
-
-```shell
-MIX_ENV=test mix conformance.cck
-MIX_ENV=test mix conformance.tags
-MIX_ENV=test mix conformance.expressions
-```
-
-These tasks print scoreboards. The hard regression gate (run in CI) is the tagged ExUnit
-suite, which asserts the expected passing-sample sets:
-
-```shell
-mix test --only conformance
-```
-
-## Requirements & dependencies
-
-- **Elixir 1.18+** (CI covers 1.18, 1.19, and 1.20).
-- Uses the **built-in `JSON` module** — no `jason` dependency.
-- The only runtime dependency is the [gherkin fork](https://github.com/tomasz-tomczyk/gherkin)
-  (itself `jason`-free). `ex_doc` is dev-only.
-
-## Installation
-
-Add `cabbage` to your dependencies in `mix.exs`, pointing at this fork:
-
-```elixir
-def deps do
-  [
-    {:cabbage, github: "tomasz-tomczyk/cabbage", branch: "master"}
-  ]
-end
-```
-
-> The Hex package and OTP application name remain `:cabbage`; a rename is deferred to a
-> later release so existing dependents keep resolving.
-
 ## Example Usage
 
 By default, feature files are expected inside `test/features`. This can be configured within
@@ -157,6 +110,46 @@ The stream is written to `cucumber-messages.ndjson` by default; configure the pa
 option. See `Cabbage.Formatter` for the emitted envelope types and the scenario-level
 step-result semantics.
 
+## Installation
+
+Add `cabbage` to your dependencies in `mix.exs`, pointing at this fork:
+
+```elixir
+def deps do
+  [
+    {:cabbage, github: "tomasz-tomczyk/cabbage", branch: "master"}
+  ]
+end
+```
+
+> The Hex package and OTP application name remain `:cabbage`; a rename is deferred to a
+> later release so existing dependents keep resolving.
+
+## Conformance
+
+This fork is verified against the upstream Cucumber suites:
+
+| Suite | Score |
+| --- | --- |
+| Cucumber Compatibility Kit (CCK) | **43 / 44** |
+| Cucumber Expressions | **115 / 115** |
+| Tag Expressions | **64 / 64** |
+
+The scoreboards are reproducible locally:
+
+```shell
+MIX_ENV=test mix conformance.cck
+MIX_ENV=test mix conformance.tags
+MIX_ENV=test mix conformance.expressions
+```
+
+These tasks print scoreboards. The hard regression gate (run in CI) is the tagged ExUnit
+suite, which asserts the expected passing-sample sets:
+
+```shell
+mix test --only conformance
+```
+
 ## Developing
 
 Run the test suite and the conformance gates:
@@ -172,12 +165,3 @@ A `docker-compose.yml` is also provided for running the tests in containers:
 ```shell
 docker-compose up
 ```
-
-## Attribution
-
-This is a fork of [`cabbage-ex/cabbage`](https://github.com/cabbage-ex/cabbage), originally
-created by Matt Widmann, Steve B, and Max Marcon. Big thanks also to
-[@meadsteve](https://github.com/meadsteve) and the
-[White Bread](https://github.com/meadsteve/white-bread) project for the original head start.
-
-Licensed under the [MIT License](LICENSE).

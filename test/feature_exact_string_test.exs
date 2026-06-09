@@ -3,10 +3,10 @@ Code.require_file("test_helper.exs", __DIR__)
 # Regression coverage for issue #64 (allow matching exact strings).
 #
 # A plain string step pattern that contains no cucumber-expression parameter
-# (`{name:type}`) should match the step text *literally* - regex metacharacters
+# (`{int}`, `{}`) should match the step text *literally* - regex metacharacters
 # like $, (, ), +, . must be treated as literal characters rather than regex
 # syntax. Parameterized strings still flow through the cucumber-expression
-# engine (covered by cucumber_expressions_test.exs).
+# engine (covered by feature_standard_expression_test.exs).
 defmodule Cabbage.FeatureExactStringTest do
   use ExUnit.Case
 

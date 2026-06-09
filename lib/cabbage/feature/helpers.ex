@@ -9,34 +9,30 @@ defmodule Cabbage.Feature.Helpers do
     quote(do: nil)
   end
 
-  # cabbage understands three kinds of string step pattern, in priority order:
+  # cabbage understands two kinds of string step pattern, in priority order:
   #
-  #   1. The cabbage-specific named-capture expression `{name:type}` (e.g.
-  #      `{count:int}`) -> `Cabbage.Feature.NamedCaptureExpression`, which produces
-  #      named captures bound into the step's `vars` map. (The spec engine in
-  #      case 2 cannot express a named binding and rejects this syntax, so this
-  #      remains a separate, frozen mini-engine — see that module's docs.)
-  #
-  #   2. A standard Cucumber Expression - it must contain at least one parameter
+  #   1. A standard Cucumber Expression - it must contain at least one parameter
   #      `{...}` (anonymous `{}` or typed `{int}`). Once it does, optional text
   #      `(s)` and alternation `a/b` in the same pattern are honoured by the real
   #      engine, `Cabbage.CucumberExpression` (cabbage-ex/cabbage#47).
   #
-  #   3. Anything else is an exact literal match: regex metacharacters ($, (, ),
+  #   2. Anything else is an exact literal match: regex metacharacters ($, (, ),
   #      +, ., /, ...) are escaped so they match literally (see issue #64).
   #
-  # Requiring a `{...}` parameter to opt in to case 2 keeps patterns like
+  # Requiring a `{...}` parameter to opt in to case 1 keeps patterns like
   # `It costs $5 (USD)` literal: with no parameter, the `(USD)` is *not* treated
   # as optional text.
-  @named_parameter_format ~r/\{[^{}:]+:[^{}:]+\}/u
+  #
+  # NOTE: the cabbage-specific `{name:type}` named-capture sugar (e.g.
+  # `{count:int}`) was removed in 1.0.0. Such a pattern now matches case 1 and
+  # the spec engine rejects it with an `Undefined parameter type 'count:int'`
+  # compile error, since `:` is not valid in a spec parameter-type name. To keep
+  # a named `vars` binding, use a regex with a named capture instead, e.g.
+  # `~r/(?<count>\d+) rows/`. See UPGRADING.md.
   @standard_expression_format ~r/\{[^{}]*\}/u
 
   defp to_regex_ast(term) when is_binary(term) do
     cond do
-      Regex.match?(@named_parameter_format, term) ->
-        regex_string = Cabbage.Feature.NamedCaptureExpression.to_regex_string(term)
-        Code.string_to_quoted!("~r/#{regex_string}/")
-
       Regex.match?(@standard_expression_format, term) ->
         regex_string = Cabbage.CucumberExpression.to_regex(term, standard_registry())
         Macro.escape(Regex.compile!(regex_string))

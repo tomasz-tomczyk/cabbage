@@ -1,51 +1,6 @@
 # Changelog
 
-## Unreleased
-
-### Added
-
-- **`Cabbage.Formatter` — an ExUnit formatter that emits a cucumber-messages
-  NDJSON stream from a normal `mix test` run.** Enable it alongside the default
-  CLI formatter:
-
-      ExUnit.start(formatters: [ExUnit.CLIFormatter, Cabbage.Formatter])
-
-  For every `Cabbage.Feature` scenario it writes `meta`, per-feature
-  `source`/`gherkinDocument`/`pickle`, `testRunStarted`, and per-scenario
-  `testCase`/`testCaseStarted`/`testStepStarted`/`testStepFinished`/`testCaseFinished`,
-  closing with `testRunFinished` whose `success` flag reflects the run. Output
-  defaults to `cucumber-messages.ndjson` and is configurable via
-  `config :cabbage, messages_output: "path.ndjson"` or the formatter's
-  `:messages_output` option. The parser-side envelopes reuse the gherkin
-  dependency's `Gherkin.Message` builders.
-  - **Step results are scenario-level.** Because cabbage runs every step inside one
-    generated ExUnit test, each step is attributed the scenario's outcome uniformly
-    (all `PASSED`, all `FAILED`, or all `SKIPPED`); the run-level `success` flag is
-    exact. Granular per-step attribution is a planned follow-up.
-
-### Changed
-
-- **Scenario state is now threaded as a value, not held in an `Agent`.** The
-  `Feature` runner compiles each step to a `fn context -> next_context end` and
-  threads the scenario's state through them with a reduce. Previously state lived
-  in a per-scenario `Agent` registered under a global name.
-  - **`async: true` is now safe by construction.** The old global Agent name
-    (`cabbage_integration_test-<scenario>-<module>`) could collide and leak state
-    between same-named scenarios / re-runs; threaded state is per-invocation.
-  - **No more leaked processes.** The Agent was started and never stopped.
-  - The public step API is **unchanged**: `defgiven/defwhen/defthen(regex, vars,
-    state, do: block)`, the `{:ok, delta}` merge return, assertion-only steps that
-    return nothing, tags, `setup`/`setup_all` seeding, data tables and doc strings
-    all behave exactly as before.
-
-### Breaking
-
-- **Removed the internal state helpers** `Cabbage.Feature.Helpers.start_state/3`,
-  `fetch_state/2`, `update_state/3`, and `agent_name/2` (the module is
-  `@moduledoc false`). Step code never called these; only code reaching into
-  cabbage internals or relying on the per-scenario Agent process is affected.
-
-## 1.0.0 - 2026-06-05
+## 1.0.0
 
 Cabbage graduates to `1.0.0`. The internals are a ground-up rewrite onto a
 spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
@@ -66,10 +21,38 @@ spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
   broken and effectively skipped; they are now prepended to every scenario in
   the feature (via pickle expansion), matching Cucumber semantics. Features that
   relied on Background being a no-op may now run those steps.
+- **Removed the non-standard `{name:type}` named-capture step sugar.** Patterns
+  like `defgiven "{count:int} rows", ...` were a cabbage-specific extension that
+  compiled to a named-capture regex (`(?<count>\d+)`) and bound `count` into the
+  step's `vars`. It is **not** part of the Cucumber Expressions spec and has been
+  dropped. Such a pattern now flows to the spec engine and raises an
+  `Undefined parameter type 'count:int'` compile error. Replace it with a regex
+  carrying a named capture — `~r/(?<count>\d+) rows/` — to keep the named `vars`
+  binding. (Spec expressions like `{int}` match, but bind positionally, not by
+  name.) See `UPGRADING.md`.
 - **Internal struct modules renamed:** `Gherkin.Elements.*` →
   `Cabbage.Feature.{Document, Scenario, Step}`. This only affects code that
   pattern-matched on Cabbage/Gherkin internals; step-definition code is
   unaffected.
+- **Removed the internal state helpers** `Cabbage.Feature.Helpers.start_state/3`,
+  `fetch_state/2`, `update_state/3`, and `agent_name/2` (the module is
+  `@moduledoc false`). Step code never called these; only code reaching into
+  cabbage internals or relying on the per-scenario Agent process is affected.
+
+### Changed
+
+- **Scenario state is now threaded as a value, not held in an `Agent`.** The
+  `Feature` runner compiles each step to a `fn context -> next_context end` and
+  threads the scenario's state through them with a reduce. Previously state lived
+  in a per-scenario `Agent` registered under a global name.
+  - **`async: true` is now safe by construction.** The old global Agent name
+    (`cabbage_integration_test-<scenario>-<module>`) could collide and leak state
+    between same-named scenarios / re-runs; threaded state is per-invocation.
+  - **No more leaked processes.** The Agent was started and never stopped.
+  - The public step API is **unchanged**: `defgiven/defwhen/defthen(regex, vars,
+    state, do: block)`, the `{:ok, delta}` merge return, assertion-only steps that
+    return nothing, tags, `setup`/`setup_all` seeding, data tables and doc strings
+    all behave exactly as before.
 
 ### Unchanged (source-compatible)
 
@@ -96,6 +79,24 @@ spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
   deferred as `unsupported`).
 - **Opt-in ambiguous-step handling** via `on_ambiguous_step:` in
   `@feature_options` (default preserves prior last-match-wins behaviour).
+- **`Cabbage.Formatter` — an ExUnit formatter that emits a cucumber-messages
+  NDJSON stream from a normal `mix test` run.** Enable it alongside the default
+  CLI formatter:
+
+      ExUnit.start(formatters: [ExUnit.CLIFormatter, Cabbage.Formatter])
+
+  For every `Cabbage.Feature` scenario it writes `meta`, per-feature
+  `source`/`gherkinDocument`/`pickle`, `testRunStarted`, and per-scenario
+  `testCase`/`testCaseStarted`/`testStepStarted`/`testStepFinished`/`testCaseFinished`,
+  closing with `testRunFinished` whose `success` flag reflects the run. Output
+  defaults to `cucumber-messages.ndjson` and is configurable via
+  `config :cabbage, messages_output: "path.ndjson"` or the formatter's
+  `:messages_output` option. The parser-side envelopes reuse the gherkin
+  dependency's `Gherkin.Message` builders.
+  - **Step results are scenario-level.** Because cabbage runs every step inside one
+    generated ExUnit test, each step is attributed the scenario's outcome uniformly
+    (all `PASSED`, all `FAILED`, or all `SKIPPED`); the run-level `success` flag is
+    exact. Granular per-step attribution is a planned follow-up.
 
 See [UPGRADING.md](UPGRADING.md) for a 0.4.1 → 1.0.0 migration guide.
 

@@ -65,6 +65,53 @@ no-op, those steps will now execute — make sure they:
 - have matching step definitions, and
 - are safe to run before every scenario (idempotent setup).
 
+### 4. Replace the non-standard `{name:type}` step sugar
+
+Cabbage used to accept a cabbage-specific `{name:type}` step pattern (e.g.
+`{count:int}`) that compiled to a regex with a *named* capture group and bound
+the matched value into the step's `vars` map under that name. This was never
+part of the Cucumber Expressions spec and has been **removed** in 1.0.0.
+
+If you leave such a pattern in place, it now reaches the spec Cucumber
+Expressions engine, which rejects `:` in a parameter-type name and raises at
+compile time:
+
+```
+This Cucumber Expression has a problem at column 1:
+
+{count:int} rows
+^---------^
+Undefined parameter type 'count:int'.
+```
+
+Find them:
+
+```sh
+grep -rnE '"\{[A-Za-z_][A-Za-z0-9_]*:[A-Za-z]+\}' test/ lib/
+```
+
+The faithful replacement is a **regex with a named capture**, which preserves
+the named `vars` binding exactly:
+
+```diff
+- defgiven "{count:int} rows", %{count: count}, _state do
++ defgiven ~r/^(?<count>\d+) rows$/, %{count: count}, _state do
+```
+
+Type equivalents for the old `{name:type}` forms:
+
+| old sugar       | named-capture regex            |
+| --------------- | ------------------------------ |
+| `{name:int}`    | `(?<name>\d+)`                 |
+| `{name:float}`  | `(?<name>\d+\.\d+)`            |
+| `{name:word}`   | `(?<name>\w*\S)`               |
+| `{name:string}` | `(?<name>"(.*)")`              |
+
+Alternatively, use a spec Cucumber Expression such as `{int}` — but note the
+**tradeoff**: spec parameters are *anonymous*. `{int}` matches an integer but
+does **not** create a named `vars` key, so you lose the `%{count: count}`
+binding. Use the regex form above if you need the named variable.
+
 ## What you might change (only if you matched internals)
 
 If any of your code pattern-matched on parser/AST structs, the internal struct
