@@ -32,6 +32,8 @@ defmodule Cabbage.Messages.Attach do
 
   use Agent
 
+  import Cabbage.Messages.MapHelpers, only: [put_unless_nil: 3]
+
   @type content_encoding :: :identity | :base64
 
   @type t :: %{
@@ -70,7 +72,7 @@ defmodule Cabbage.Messages.Attach do
 
     record =
       %{body: encoded, content_encoding: encoding, media_type: media_type}
-      |> put_optional(:file_name, file_name)
+      |> put_unless_nil(:file_name, file_name)
 
     push(world, record)
   end
@@ -110,7 +112,4 @@ defmodule Cabbage.Messages.Attach do
   # and Base64-encoded (BASE64), matching cucumber's "byte payloads are always base64" rule.
   defp encode(body) when is_binary(body), do: {body, :identity}
   defp encode({:bytes, bytes}) when is_binary(bytes), do: {Base.encode64(bytes), :base64}
-
-  defp put_optional(map, _key, nil), do: map
-  defp put_optional(map, key, value), do: Map.put(map, key, value)
 end

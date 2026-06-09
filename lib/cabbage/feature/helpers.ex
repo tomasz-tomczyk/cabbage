@@ -14,10 +14,10 @@ defmodule Cabbage.Feature.Helpers do
   #   1. A standard Cucumber Expression - it must contain at least one parameter
   #      `{...}` (anonymous `{}` or typed `{int}`). Once it does, optional text
   #      `(s)` and alternation `a/b` in the same pattern are honoured by the real
-  #      engine, `Cabbage.CucumberExpression` (cabbage-ex/cabbage#47).
+  #      engine, `Cabbage.CucumberExpression`.
   #
   #   2. Anything else is an exact literal match: regex metacharacters ($, (, ),
-  #      +, ., /, ...) are escaped so they match literally (see issue #64).
+  #      +, ., /, ...) are escaped so they match literally.
   #
   # Requiring a `{...}` parameter to opt in to case 1 keeps patterns like
   # `It costs $5 (USD)` literal: with no parameter, the `(USD)` is *not* treated

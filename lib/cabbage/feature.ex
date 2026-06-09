@@ -2,6 +2,12 @@ defmodule Cabbage.Feature do
   @moduledoc """
   An extension on ExUnit to be able to execute feature files.
 
+  > #### Which runner is this? {: .info}
+  >
+  > `Cabbage.Feature` is the compile-time runner you `use` in a test module — almost
+  > certainly the one you want. It is a separate path from `Cabbage.Messages`, the runtime
+  > cucumber-messages interpreter the Cucumber Compatibility Kit is graded against.
+
   ## Configuration
 
   In `config/test.exs`
@@ -303,7 +309,7 @@ defmodule Cabbage.Feature do
          step,
          step_type
        ) do
-    {regex, _} = Code.eval_quoted(regex)
+    regex = eval_regex(regex)
 
     named_vars =
       extract_named_vars(regex, step.text)
@@ -349,20 +355,18 @@ defmodule Cabbage.Feature do
     raise MissingStepError, step_text: step.text, step_type: step_type, extra_vars: extra_vars
   end
 
-  defp find_implementation_of_step(step, steps) do
-    Enum.find(steps, fn {:{}, _, [r, _, _, _, _]} ->
-      step.text =~ r |> Code.eval_quoted() |> elem(0)
-    end)
-  end
+  # Steps store their regex as a quoted literal AST; evaluate it back to a `%Regex{}`.
+  defp eval_regex(quoted), do: quoted |> Code.eval_quoted() |> elem(0)
+
+  # Does `step`'s text match a registered step definition's regex?
+  defp step_matches?(step, {:{}, _, [regex, _, _, _, _]}), do: step.text =~ eval_regex(regex)
+
+  defp find_implementation_of_step(step, steps), do: Enum.find(steps, &step_matches?(step, &1))
 
   # All registered step definitions whose regex matches `step.text`. `find_implementation_of_step/2`
   # picks the FIRST of these (first-match-wins); this enumerates them for the opt-in ambiguity
   # check, which only cares whether there is more than one.
-  defp matching_implementations_of_step(step, steps) do
-    Enum.filter(steps, fn {:{}, _, [r, _, _, _, _]} ->
-      step.text =~ r |> Code.eval_quoted() |> elem(0)
-    end)
-  end
+  defp matching_implementations_of_step(step, steps), do: Enum.filter(steps, &step_matches?(step, &1))
 
   # Opt-in compile-time ambiguity detection. `find_implementation_of_step/2` is silently
   # first-match-wins; some feature modules rely on that (a general pattern plus a specific
@@ -388,8 +392,7 @@ defmodule Cabbage.Feature do
     patterns =
       matches
       |> Enum.map(fn {:{}, _, [r, _, _, _, _]} ->
-        {regex, _} = Code.eval_quoted(r)
-        "    " <> inspect(Regex.source(regex))
+        "    " <> inspect(Regex.source(eval_regex(r)))
       end)
       |> Enum.join("\n")
 

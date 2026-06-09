@@ -18,6 +18,8 @@ defmodule Cabbage.Messages.Matcher do
   alias Cabbage.Messages.StepRegistry
   alias Cabbage.Messages.StepRegistry.StepDefinition
 
+  import Cabbage.Messages.MapHelpers, only: [put_unless_nil: 3]
+
   @type match :: %{definition: StepDefinition.t(), arguments: [map()], values: [term()]}
 
   @doc """
@@ -95,18 +97,15 @@ defmodule Cabbage.Messages.Matcher do
   # serialize them; absent start/value/children are omitted.
   defp argument(group, parameter_type_name) do
     %{"group" => group_json(group)}
-    |> maybe_put("parameterTypeName", parameter_type_name)
+    |> put_unless_nil("parameterTypeName", parameter_type_name)
   end
 
   defp group_json(%{start: start, value: value} = group) do
     children = Map.get(group, :children)
 
     %{}
-    |> maybe_put("start", start)
-    |> maybe_put("value", value)
-    |> maybe_put("children", children && Enum.map(children, &group_json/1))
+    |> put_unless_nil("start", start)
+    |> put_unless_nil("value", value)
+    |> put_unless_nil("children", children && Enum.map(children, &group_json/1))
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

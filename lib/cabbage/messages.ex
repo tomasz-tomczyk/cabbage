@@ -26,6 +26,19 @@ defmodule Cabbage.Messages do
   before any `testCaseStarted`. `run/3` accepts one feature; `run_features/2` aggregates
   several features into a single run (the `multiple-features` CCK shape).
 
+  ## Code map
+
+  The implementation reads top-to-bottom as the pipeline above. `run/3` and `run_features/3`
+  are the entry points; `do_run_features/6` is the 7-step manifest that assembles the run.
+  The phases it delegates to, in order:
+
+    * `parser_envelopes/2` — Source/GherkinDocument/Pickle (per feature)
+    * `registration_envelopes/3` — parameterType / hook / stepDefinition envelopes
+    * `plan_and_execute/9` — plan each pickle into a TestCase, then run it
+    * `execute_test_case/4` → `run_attempts/6` → `run_attempt/5` — the retry loop
+    * `execute_steps/3` → `execute_step/3` — one step at a time
+    * `intrinsic_status/3` then `report_status/2` — the status + skip-propagation machine
+
   ## Step outcome protocol
 
   A step definition's run function may return `:ok`, `nil`, `{:ok, world}`, the strings
@@ -81,7 +94,7 @@ defmodule Cabbage.Messages do
   `testStepFinished` (or a global hook's `testRunHookStarted`/`testRunHookFinished`). The
   drain happens even when the body raised, so a body may attach *then* fail.
 
-  Ambiguity (cabbage-ex/cabbage#88) is detected here via the match count. It is **not**
+  Ambiguity is detected here via the match count. It is **not**
   surfaced in the compile-time `Cabbage.Feature` runner: that path's
   `find_implementation_of_step/2` uses first-match-wins, and existing feature modules may
   rely on that (general pattern + specific override). Turning first-match into a
@@ -91,6 +104,8 @@ defmodule Cabbage.Messages do
 
   alias Cabbage.Messages.{Attach, HookRegistry, Ids, Matcher, StepRegistry}
   alias Gherkin.Message
+
+  import Cabbage.Messages.MapHelpers, only: [put_unless_nil: 3]
 
   @type envelope :: map()
 
@@ -378,8 +393,8 @@ defmodule Cabbage.Messages do
   defp hook_definition_envelope(hook, id) do
     inner =
       %{"id" => id, "type" => hook_type_string(hook.type), "sourceReference" => source_reference(hook)}
-      |> maybe_put("name", hook.name)
-      |> maybe_put("tagExpression", hook.tag_expression)
+      |> put_unless_nil("name", hook.name)
+      |> put_unless_nil("tagExpression", hook.tag_expression)
 
     %{"hook" => inner}
   end
@@ -388,9 +403,6 @@ defmodule Cabbage.Messages do
   defp hook_type_string(:after_test_case), do: "AFTER_TEST_CASE"
   defp hook_type_string(:before_test_run), do: "BEFORE_TEST_RUN"
   defp hook_type_string(:after_test_run), do: "AFTER_TEST_RUN"
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # ---- Global (BeforeAll/AfterAll) hooks -------------------------------------
 
@@ -851,7 +863,7 @@ defmodule Cabbage.Messages do
         "mediaType" => attachment.media_type,
         "timestamp" => timestamp(Ids.tick(ids))
       })
-      |> maybe_put("fileName", Map.get(attachment, :file_name))
+      |> put_unless_nil("fileName", Map.get(attachment, :file_name))
 
     %{"attachment" => inner}
   end
