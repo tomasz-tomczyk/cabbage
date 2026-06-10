@@ -484,11 +484,17 @@ defmodule Cabbage.Feature do
 
   # Steps store their pattern as a quoted literal AST: either a `%Regex{}` (regex
   # and exact-string patterns) or a `{:cucumber_expression, source}` marker.
-  # `eval_pattern/1` evaluates it back and tags it so callers can branch.
+  # `eval_pattern/1` evaluates it back and re-classifies it through the shared
+  # `Cabbage.StepPattern.classify/2` so callers can branch on a tagged, compiled
+  # form. A stored regex round-trips verbatim; a stored expression source recompiles
+  # against the default registry.
   defp eval_pattern(quoted) do
     case Code.eval_quoted(quoted) |> elem(0) do
-      {:cucumber_expression, source} -> {:cucumber_expression, Cabbage.Feature.Helpers.compile_expression(source)}
-      %Regex{} = regex -> {:regex, regex}
+      {:cucumber_expression, source} ->
+        Cabbage.StepPattern.classify(source, Cabbage.StepPattern.standard_registry())
+
+      %Regex{} = regex ->
+        {:regex, regex}
     end
   end
 

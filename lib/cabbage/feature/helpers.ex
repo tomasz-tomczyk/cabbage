@@ -9,59 +9,32 @@ defmodule Cabbage.Feature.Helpers do
     quote(do: nil)
   end
 
-  # cabbage understands three kinds of step pattern. A step is stored with its
-  # pattern AST as the first tuple element:
+  # Step-pattern classification (the binary-with-`{...}` vs literal vs `~r//`
+  # decision, with the same `{name:type}` validation UX) lives in the shared
+  # `Cabbage.StepPattern.classify/2`. Here we only turn the classified result into
+  # the stored AST shape the Feature runner expects:
   #
-  #   * a `~r/.../` `Regex` (passed through verbatim) — matched with
-  #     `Regex.named_captures`, so its matched data is a *map* of named captures
-  #     (string values);
+  #   * `~r/.../` regex (and the escaped-anchored regex for a literal binary) is
+  #     stored as a `Regex` literal AST, matched with `Regex.named_captures` so its
+  #     matched data is a *map* of named captures (string values);
   #
-  #   * a binary containing at least one `{...}` parameter (anonymous `{}` or
-  #     typed `{int}`) — a standard Cucumber Expression, stored as a
-  #     `{:cucumber_expression, source}` marker and matched through the real
-  #     engine, `Cabbage.CucumberExpression`, so its matched data is a positional
-  #     *list* of transformed argument values (`{int}` -> integer, etc.);
+  #   * a Cucumber Expression is stored as a `{:cucumber_expression, source}` marker
+  #     (the source string, NOT the compiled struct — `eval_pattern/1` recompiles it
+  #     at the feature module's compile time) and matched through the real engine,
+  #     `Cabbage.CucumberExpression`, so its matched data is a positional *list* of
+  #     transformed argument values (`{int}` -> integer, etc.).
   #
-  #   * any other binary — an exact literal match, stored as a `Regex` whose
-  #     metacharacters ($, (, ), +, ., /, ...) are escaped to match literally.
-  #
-  # Requiring a `{...}` parameter to opt in to the Cucumber Expression case keeps
-  # patterns like `It costs $5 (USD)` literal: with no parameter, the `(USD)` is
-  # *not* treated as optional text. A literal `{` can be escaped with a backslash:
-  # writing "\\{weird\\}" in Elixir source yields the pattern `\{weird\}`, which
-  # the engine matches against the literal text `{weird}`.
-  #
-  # The expression is compiled here (at step-macro expansion) purely to validate
-  # it: a malformed expression — or the removed cabbage-specific `{name:type}`
-  # named-capture sugar (e.g. `{count:int}`), since `:` is not valid in a spec
-  # parameter-type name — raises a clear `Undefined parameter type` compile error
-  # at the definition site rather than later. To keep a named `vars` binding, use
-  # a regex with a named capture instead, e.g. `~r/(?<count>\d+) rows/`; spec
-  # expressions like `{int}` match but bind positionally. See UPGRADING.md.
-  @standard_expression_format ~r/\{[^{}]*\}/u
-
+  # Classifying here also validates the expression at the definition site: the
+  # removed `{name:type}` sugar (e.g. `{count:int}`) raises a clear
+  # `Undefined parameter type` compile error at the `defgiven`/`defstep` line.
   defp to_pattern_ast(term) when is_binary(term) do
-    cond do
-      Regex.match?(@standard_expression_format, term) ->
-        _ = Cabbage.CucumberExpression.compile(term, standard_registry())
-        Macro.escape({:cucumber_expression, term})
-
-      true ->
-        regex = Regex.compile!("^" <> Regex.escape(term) <> "$")
-        Macro.escape(regex)
+    case Cabbage.StepPattern.classify(term, Cabbage.StepPattern.standard_registry()) do
+      {:cucumber_expression, _compiled} -> Macro.escape({:cucumber_expression, term})
+      {:regex, regex} -> Macro.escape(regex)
     end
   end
 
   defp to_pattern_ast(term), do: term
-
-  @doc false
-  # Compiles a stored `{:cucumber_expression, source}` marker back into a
-  # `%Cabbage.CucumberExpression{}` against the built-in parameter-type registry.
-  # Called at the feature module's compile time by `Cabbage.Feature` to match
-  # steps and extract their positional, transformed arguments.
-  def compile_expression(source), do: Cabbage.CucumberExpression.compile(source, standard_registry())
-
-  defp standard_registry, do: Cabbage.CucumberExpression.ParameterTypeRegistry.new()
 
   def add_tag(module, "@" <> tag_name, block), do: add_tag(module, tag_name, block)
 
