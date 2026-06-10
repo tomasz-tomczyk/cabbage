@@ -50,15 +50,21 @@ defmodule MyApp.Features.CoffeeTest do
     %{my_starting: :state, user: %User{}} # Beginning state
   end
 
-  # `defgiven/4`, `defwhen/4` and `defthen/4` take a regex, the matched data,
-  # the current state, and a block.
+  # `defgiven/4`, `defwhen/4` and `defthen/4` take a pattern, the matched data,
+  # the current state, and a block. A pattern is either a regex or a string
+  # Cucumber Expression.
+  #
+  # A regex binds its matched data as a *map* of named captures (string values):
   defgiven ~r/^there (is|are) (?<number>\d+) coffee(s) left in the machine$/, %{number: number}, %{user: user} do
     # Returning `{:ok, map}` merges into the scenario state; anything else leaves it unchanged.
-    {:ok, %{machine: Machine.put_coffee(Machine.new, number)}}
+    {:ok, %{machine: Machine.put_coffee(Machine.new, String.to_integer(number))}}
   end
 
-  defgiven ~r/^I have deposited £(?<number>\d+)$/, %{number: number}, %{user: user, machine: machine} do
-    {:ok, %{machine: Machine.deposit(machine, user, number)}} # State is merged, so `user` is kept
+  # A Cucumber Expression binds its matched data as a positional *list* of
+  # already-transformed arguments — here `{int}` arrives as an integer, not a string.
+  # (To match a literal `{`, escape it: `"\\{weird\\}"` matches the text `{weird}`.)
+  defgiven "I have deposited £{int}", [amount], %{user: user, machine: machine} do
+    {:ok, %{machine: Machine.deposit(machine, user, amount)}} # State is merged, so `user` is kept
   end
 
   # With no captures, the matched map is empty. State is unchanged here.

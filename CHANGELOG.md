@@ -71,6 +71,14 @@ spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
 - **Full Cucumber Expressions engine** (`{int}`, `{word}`, `{string}`,
   custom/optional/alternation), validated at **115/115** against the upstream
   cucumber-expressions conformance corpus.
+- **String Cucumber Expression patterns in `Cabbage.Feature` step macros.**
+  `defgiven`/`defwhen`/`defthen` now accept a string Cucumber Expression
+  (`defgiven "I have {int} cucumbers", [count], state`) alongside `~r/regex/`.
+  The expression is matched through the engine above, so arguments arrive as a
+  positional list of *transformed* values (`{int}` -> integer, `{float}` ->
+  float, `{string}`/`{word}` -> string). Regex patterns are unchanged and still
+  bind a named-captures map. (Built-in parameter types only; there is no
+  public custom-parameter-type API for `Cabbage.Feature`.)
 - **Tag Expressions engine** (`and`/`or`/`not`/parentheses), validated at
   **64/64** against the upstream tag-expressions corpus.
 - **cucumber-messages runner** (`Cabbage.Messages`) with hooks, attachments,

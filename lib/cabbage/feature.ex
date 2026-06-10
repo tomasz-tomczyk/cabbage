@@ -33,8 +33,10 @@ defmodule Cabbage.Feature do
           {:ok, %{new: :state}}
         end
 
-        defwhen ~r/I when execute it/, _matched_data, _current_state do
-          # Nothing to do, don't need to return anything if we don't want to
+        # Patterns may also be string Cucumber Expressions; `{int}` arrives as an
+        # integer in the positional matched-data list.
+        defwhen "I when execute it {int} times", [times], _current_state do
+          assert times >= 0
           nil
         end
 
@@ -55,11 +57,18 @@ defmodule Cabbage.Feature do
         end
       end
 
+  ### Step Patterns
+
+  The first argument to `defgiven/4`, `defwhen/4` and `defthen/4` is a *pattern*.
+  It may be either a `~r/regex/` or a string Cucumber Expression. The two differ
+  only in how the matched data (the second argument) is shaped.
+
   ### Extracting Matched Data
 
-  You'll likely have data within your feature statements which you want to extract. The second parameter to each of `defgiven/4`, `defwhen/4` and `defthen/4` is a pattern in which specifies what you want to call the matched data, provided as a map.
+  You'll likely have data within your feature statements which you want to extract.
 
-  For example, if you want to match on a number:
+  A **regex** binds its matched data as a *map of named captures* (the values are
+  always strings):
 
       # NOTICE THE `number` VARIABLE IS STILL A STRING!!
       defgiven ~r/^there (is|are) (?<number>\d+) widget(s?)$/, %{number: number}, _state do
@@ -67,6 +76,30 @@ defmodule Cabbage.Feature do
       end
 
   For every named capture, you'll have a key as an atom in the second parameter. You can then use those variables you create within your block.
+
+  A **Cucumber Expression** (any string pattern containing a `{...}` parameter)
+  binds its matched data as a *positional list* of already-transformed arguments.
+  Parameter types are converted for you — `{int}` arrives as an integer,
+  `{float}` as a float, `{string}`/`{word}` as a string:
+
+      # `count` is an INTEGER, already transformed by the {int} parameter type.
+      defgiven "there are {int} widgets", [count], _state do
+        assert count >= 1
+      end
+
+  Cucumber Expression arguments are positional, so the second argument is a list
+  whose elements line up with the `{...}` parameters left to right. (Tables and
+  doc strings are not Cucumber Expression parameters; use a regex named capture
+  if you need to bind them.) To match a literal `{`, escape it with a backslash:
+  `"\\\\{weird\\\\}"` in Elixir source matches the text `{weird}` instead of being
+  parsed as a parameter.
+
+  > #### `{name:type}` is not supported {: .warning}
+  >
+  > The non-spec `{name:type}` named-capture sugar (e.g. `{count:int}`) was removed
+  > in 1.0.0. Such a pattern reaches the spec engine and raises an
+  > `Undefined parameter type 'count:int'` compile error. Use a regex named capture
+  > (`~r/(?<count>\d+)/`) to bind by name, or the spec `{int}` to bind positionally.
 
   ### Modifying State
 
@@ -305,19 +338,27 @@ defmodule Cabbage.Feature do
   end
 
   defp compile(
-         {:{}, _, [regex, vars, state_pattern, block, metadata]},
+         {:{}, _, [pattern, vars, state_pattern, block, metadata]},
          step,
          step_type
        ) do
-    regex = eval_regex(regex)
+    matched_data =
+      case eval_pattern(pattern) do
+        {:regex, regex} ->
+          extract_named_vars(regex, step.text)
+          |> Map.merge(%{table: step.table_data, doc_string: step.doc_string})
 
-    named_vars =
-      extract_named_vars(regex, step.text)
-      |> Map.merge(%{table: step.table_data, doc_string: step.doc_string})
+        # Cucumber Expression arguments are positional and already transformed
+        # (`{int}` -> integer, `{string}` -> string, ...); they bind as a list,
+        # not a named-captures map. Table/doc-string are not spec parameters, so
+        # they are not injected here — use a regex named capture if you need them.
+        {:cucumber_expression, expression} ->
+          Cabbage.CucumberExpression.match(expression, step.text)
+      end
 
     quote generated: true do
       fn context ->
-        with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(named_vars))},
+        with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(matched_data))},
              {_type, state = unquote(state_pattern)} <- {:state, context} do
           new_state =
             case unquote(block) do
@@ -355,15 +396,27 @@ defmodule Cabbage.Feature do
     raise MissingStepError, step_text: step.text, step_type: step_type, extra_vars: extra_vars
   end
 
-  # Steps store their regex as a quoted literal AST; evaluate it back to a `%Regex{}`.
-  defp eval_regex(quoted), do: quoted |> Code.eval_quoted() |> elem(0)
+  # Steps store their pattern as a quoted literal AST: either a `%Regex{}` (regex
+  # and exact-string patterns) or a `{:cucumber_expression, source}` marker.
+  # `eval_pattern/1` evaluates it back and tags it so callers can branch.
+  defp eval_pattern(quoted) do
+    case Code.eval_quoted(quoted) |> elem(0) do
+      {:cucumber_expression, source} -> {:cucumber_expression, Cabbage.Feature.Helpers.compile_expression(source)}
+      %Regex{} = regex -> {:regex, regex}
+    end
+  end
 
-  # Does `step`'s text match a registered step definition's regex?
-  defp step_matches?(step, {:{}, _, [regex, _, _, _, _]}), do: step.text =~ eval_regex(regex)
+  # Does `step`'s text match a registered step definition's pattern?
+  defp step_matches?(step, {:{}, _, [pattern, _, _, _, _]}) do
+    case eval_pattern(pattern) do
+      {:regex, regex} -> step.text =~ regex
+      {:cucumber_expression, expression} -> Cabbage.CucumberExpression.match(expression, step.text) != nil
+    end
+  end
 
   defp find_implementation_of_step(step, steps), do: Enum.find(steps, &step_matches?(step, &1))
 
-  # All registered step definitions whose regex matches `step.text`. `find_implementation_of_step/2`
+  # All registered step definitions whose pattern matches `step.text`. `find_implementation_of_step/2`
   # picks the FIRST of these (first-match-wins); this enumerates them for the opt-in ambiguity
   # check, which only cares whether there is more than one.
   defp matching_implementations_of_step(step, steps), do: Enum.filter(steps, &step_matches?(step, &1))
@@ -391,8 +444,11 @@ defmodule Cabbage.Feature do
   defp report_ambiguous_step(step, matches, on_ambiguous, env) do
     patterns =
       matches
-      |> Enum.map(fn {:{}, _, [r, _, _, _, _]} ->
-        "    " <> inspect(Regex.source(eval_regex(r)))
+      |> Enum.map(fn {:{}, _, [pattern, _, _, _, _]} ->
+        case eval_pattern(pattern) do
+          {:regex, regex} -> "    " <> inspect(Regex.source(regex))
+          {:cucumber_expression, expression} -> "    " <> inspect(expression.source)
+        end
       end)
       |> Enum.join("\n")
 

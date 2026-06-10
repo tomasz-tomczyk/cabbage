@@ -107,10 +107,19 @@ Type equivalents for the old `{name:type}` forms:
 | `{name:word}`   | `(?<name>\w*\S)`               |
 | `{name:string}` | `(?<name>"(.*)")`              |
 
-Alternatively, use a spec Cucumber Expression such as `{int}` — but note the
-**tradeoff**: spec parameters are *anonymous*. `{int}` matches an integer but
-does **not** create a named `vars` key, so you lose the `%{count: count}`
-binding. Use the regex form above if you need the named variable.
+Alternatively, use a spec Cucumber Expression such as `{int}`, which now works
+directly in `defgiven`/`defwhen`/`defthen`:
+
+```diff
+- defgiven "{count:int} rows", %{count: count}, _state do
++ defgiven "{int} rows", [count], _state do
+```
+
+Note the **tradeoff**: spec parameters are *positional*, not named. `{int}` binds
+its value (already transformed to an integer) into the matched-data **list**
+rather than a `%{count: count}` map, so you address it by position (`[count]`),
+not by name. Use the regex form above if you specifically need the named variable
+in a map.
 
 ## What you might change (only if you matched internals)
 
