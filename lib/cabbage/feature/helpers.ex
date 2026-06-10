@@ -93,6 +93,53 @@ defmodule Cabbage.Feature.Helpers do
     ]
   end
 
+  # Applies a step block's return value to the threaded context (decision D3):
+  #
+  #   :ok | nil          -> context unchanged
+  #   {:ok, map}         -> Map.merge(context, map)        (delta-merge; back-compat)
+  #   a plain map        -> replaces the context with that map
+  #   {:error, reason}   -> raise (the step reported failure)
+  #   a struct / other   -> raise (a non-conforming return; no silent keep)
+  #
+  # Clause order matters: `{:error, _}` is a tuple, and a struct satisfies `is_map/1`,
+  # so the struct clauses (bare and `{:ok, _}`-wrapped) are matched before their
+  # plain-map counterparts. Failures raise with the step's own metadata for a useful
+  # stacktrace.
+  def apply_step_return(:ok, state, _step_text, _module, _metadata), do: state
+  def apply_step_return(nil, state, _step_text, _module, _metadata), do: state
+
+  # `{:ok, struct}` must not merge: it would inject :__struct__ + the struct's fields
+  # into the context, bypassing exactly what the bare-struct clause below forbids.
+  def apply_step_return({:ok, %_{} = struct}, _state, step_text, module, metadata) do
+    reraise "Step #{inspect(step_text)} returned {:ok, #{inspect(struct.__struct__)} struct}; " <>
+              "the context must be a plain map. Return a plain map, {:ok, map}, or :ok.",
+            stacktrace(module, metadata)
+  end
+
+  def apply_step_return({:ok, map}, state, _step_text, _module, _metadata) when is_map(map) do
+    Map.merge(state, map)
+  end
+
+  def apply_step_return({:error, reason}, _state, step_text, module, metadata) do
+    reraise "Step #{inspect(step_text)} returned {:error, #{inspect(reason)}}; the step reported failure.",
+            stacktrace(module, metadata)
+  end
+
+  def apply_step_return(%_{} = struct, _state, step_text, module, metadata) do
+    reraise "Step #{inspect(step_text)} returned a struct (#{inspect(struct.__struct__)}); " <>
+              "the context must be a plain map. Return a plain map, {:ok, map}, or :ok.",
+            stacktrace(module, metadata)
+  end
+
+  # A bare (non-struct) map REPLACES the context.
+  def apply_step_return(map, _state, _step_text, _module, _metadata) when is_map(map), do: map
+
+  def apply_step_return(other, _state, step_text, module, metadata) do
+    reraise "Step #{inspect(step_text)} returned #{inspect(other)}; " <>
+              "expected :ok | nil | a map | {:ok, map}.",
+            stacktrace(module, metadata)
+  end
+
   @keys ~w(async case describe file integration line test type scenario case_template registered __table__ __doc_string__)a
   def remove_hidden_state(state) do
     Map.drop(state, @keys)

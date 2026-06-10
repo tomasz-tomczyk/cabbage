@@ -1,22 +1,15 @@
 Code.require_file("test_helper.exs", __DIR__)
 
-# T5/T6: the full step-return state contract (decision D3).
-#
-# TDD shape: these tests are written to the TARGET contract that T6 introduces and
-# are tagged `@tag :skip` so the suite stays green between T5 (audit) and T6 (flip).
-# T6 removes the `@moduletag :skip` line below to turn them on. The contract:
+# The full step-return state contract (decision D3), enabled by T6:
 #
 #   :ok | nil          -> context unchanged
 #   a map              -> REPLACES the context with that map
 #   {:ok, map}         -> Map.merge(context, map)   (delta-merge; back-compat)
 #   {:error, reason}   -> raises a clear error naming the step + reason
-#   a struct           -> raises (context must be a plain map)
+#   a struct           -> raises (context must be a plain map; bare or {:ok, _}-wrapped)
 #   anything else      -> raises a clear error naming the step + offending value
 defmodule Cabbage.FeatureStateContractTest do
   use ExUnit.Case
-
-  # Flip this tag off in T6 (delete the moduletag line) to enable the suite.
-  @moduletag :skip
 
   describe "keep-state returns" do
     test ":ok leaves the context unchanged" do
@@ -149,6 +142,24 @@ defmodule Cabbage.FeatureStateContractTest do
       {result, output} = CabbageTestHelper.run([], [ContractStructFeature])
       assert result == %{failures: 1, skipped: 0, total: 1, excluded: 0}
       assert output =~ "I provide Then"
+      assert output =~ "URI"
+      assert output =~ "plain map"
+    end
+
+    test "{:ok, struct} raises instead of merging struct fields into the context" do
+      defmodule ContractOkStructFeature do
+        use Cabbage.Feature, file: "simplest.feature"
+
+        defthen ~r/^I provide Then$/, _vars, _state do
+          {:ok, %URI{}}
+        end
+      end
+
+      {result, output} = CabbageTestHelper.run([], [ContractOkStructFeature])
+      assert result == %{failures: 1, skipped: 0, total: 1, excluded: 0}
+      assert output =~ "I provide Then"
+      assert output =~ "URI"
+      assert output =~ "plain map"
     end
   end
 end

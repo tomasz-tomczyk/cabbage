@@ -50,10 +50,11 @@ defmodule Cabbage.FeatureExecutionTest do
 
       {result, output} = CabbageTestHelper.run()
       assert result == %{failures: 1, skipped: 0, total: 1, excluded: 0}
-      # Match the stable parts of the error rather than its exact one-line layout:
-      # Elixir 1.20 renders BadMapError's value on a separate, indented line.
-      assert output =~ "(BadMapError) expected a map, got:"
+      # `{:ok, _}` only merges when the payload is a map; a keyword list is not, so
+      # the D3 contract fails loudly naming the step and the offending return.
+      assert output =~ "I provide Then"
       assert output =~ "[some: :some]"
+      assert output =~ ":ok | nil | a map | {:ok, map}"
     end
 
     test "accepts state steps that does comply to pattern {:ok, map}" do

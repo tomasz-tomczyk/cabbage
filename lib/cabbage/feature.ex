@@ -42,6 +42,7 @@ defmodule Cabbage.Feature do
 
         defthen ~r/everything is ok/, _matched_data, _current_state do
           assert true
+          :ok
         end
       end
 
@@ -54,6 +55,7 @@ defmodule Cabbage.Feature do
           assert 1 + 1 == 2
           nil
           assert true
+          :ok
         end
       end
 
@@ -73,6 +75,7 @@ defmodule Cabbage.Feature do
       # NOTICE THE `number` VARIABLE IS STILL A STRING!!
       defgiven ~r/^there (is|are) (?<number>\d+) widget(s?)$/, %{number: number}, _state do
         assert String.to_integer(number) >= 1
+        :ok
       end
 
   For every named capture, you'll have a key as an atom in the second parameter. You can then use those variables you create within your block.
@@ -85,6 +88,7 @@ defmodule Cabbage.Feature do
       # `count` is an INTEGER, already transformed by the {int} parameter type.
       defgiven "there are {int} widgets", [count], _state do
         assert count >= 1
+        :ok
       end
 
   Cucumber Expression arguments are positional, so the second argument is a list
@@ -107,15 +111,57 @@ defmodule Cabbage.Feature do
 
   You can setup initial state using plain ExUnit `setup/1` and `setup_all/1`. Whatever state is provided via the `test/3` macro will be your initial state.
 
-  To update the state, simply return `{:ok, %{new: :state}}`. Note that a `Map.merge/2` will be performed for you so only have to specify the keys you want to update. For this reason, only a map is allowed as state.
+  A step's **return value drives the context** for the next step. The contract:
 
-  Heres an example modifying state:
+  | Return value       | Effect on the context                                   |
+  | ------------------ | ------------------------------------------------------- |
+  | `:ok` or `nil`     | context unchanged                                       |
+  | `{:ok, map}`       | `Map.merge(context, map)` — delta-merge (recommended)   |
+  | a bare `map`       | **replaces** the context with that map                  |
+  | `{:error, reason}` | the step fails (raises, naming the step and reason)     |
+  | anything else      | the step fails (raises, naming the step and the value)  |
 
+  `{:ok, %{...}}` is the ergonomic everyday form: specify only the keys you want to
+  add or change and they are merged in. A bare map is the whole-world form: it
+  replaces the entire context (use it to deliberately reset state). A non-conforming
+  return no longer silently keeps the context — it raises, so a step that "updates
+  state" can never quietly no-op.
+
+      # Merge: `:user` is added/updated, the rest of the context is preserved.
       defwhen ~r/^I am an admin$/, _, %{user: user} do
         {:ok, %{user: User.promote_to_admin(user)}}
       end
 
-  All other statements do not need to return (and should be careful not to!) the `{:ok, state}` pattern.
+      # Replace: the context becomes exactly `%{cart: []}`.
+      defstep ~r/^the cart is reset$/, _vars, _ctx do
+        %{cart: []}
+      end
+
+      # Keep: an assertion-only step must return `:ok` (or `nil`); a bare trailing
+      # `assert` would return a boolean and raise under the contract.
+      defthen ~r/^it is fine$/, _vars, _ctx do
+        assert true
+        :ok
+      end
+
+  > #### Returning a struct {: .warning}
+  >
+  > The context must be a plain map. Returning a struct (which is itself a map)
+  > raises rather than replacing the context, since a struct context would break the
+  > map-pattern destructuring used to bind state. The wrapped form is rejected too:
+  > `{:ok, struct}` raises instead of merging the struct's fields (and `:__struct__`)
+  > into the context. Return a plain map or `{:ok, map}`.
+
+  A step's gherkin **data table** and **doc string** are also reachable from the
+  context under the reserved keys `:__table__` and `:__doc_string__` (the empty list
+  / empty string when absent). This is the uniform path for Cucumber Expression
+  steps, whose matched data is a positional list with no room for named
+  `:table`/`:doc_string` captures. The reserved keys are injected per step and never
+  threaded forward:
+
+      defwhen "I submit:", _vars, ctx do
+        {:ok, %{submitted: ctx.__table__}}
+      end
 
   ### Organizing Features
 
@@ -350,9 +396,10 @@ defmodule Cabbage.Feature do
 
   Used at compile time by `__before_compile__/1`; `steps` is the list of registered step
   definition ASTs. The returned function receives the current scenario state, runs the matched
-  step block, and returns the next state — `Map.merge`d with the step's `{:ok, delta}` return
-  (or unchanged for any other return). `__before_compile__/1` threads these functions with a
-  reduce, so scenario state is a plain value rather than process state.
+  step block, and returns the next state per the D3 return contract (see the moduledoc):
+  `:ok`/`nil` keep it, `{:ok, map}` merges, a bare map replaces, anything else raises.
+  `__before_compile__/1` threads these functions with a reduce, so scenario state is a plain
+  value rather than process state.
   """
   @spec compile_step(struct(), [Macro.t()]) :: Macro.t()
   def compile_step(step, steps) when is_list(steps) do
@@ -396,10 +443,13 @@ defmodule Cabbage.Feature do
         with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(matched_data))},
              {_type, state = unquote(state_pattern)} <- {:state, context} do
           new_state =
-            case unquote(block) do
-              {:ok, new_state} -> Map.merge(state, new_state)
-              _ -> state
-            end
+            Cabbage.Feature.Helpers.apply_step_return(
+              unquote(block),
+              state,
+              unquote(step.text),
+              __MODULE__,
+              unquote(Macro.escape(metadata))
+            )
 
           Logger.info([
             "\t\t",
