@@ -63,6 +63,22 @@ defmodule Cabbage.StepPattern do
   end
 
   @doc """
+  Classifies a `%Regex{}` or a binary that is *known* to be a Cucumber Expression.
+
+  Unlike `classify/2`, a braceless binary is still compiled as a Cucumber Expression
+  rather than treated as a literal regex. This is the Messages-layer policy (every
+  binary is an expression, even a parameter-free one); the Feature layer uses
+  `classify/2`'s braces-opt-in policy instead. A regex still passes through as
+  `{:regex, regex}`.
+  """
+  @spec classify_expression(Regex.t() | String.t(), CucumberExpression.ParameterTypeRegistry.t()) :: classified()
+  def classify_expression(%Regex{} = regex, _parameter_registry), do: {:regex, regex}
+
+  def classify_expression(pattern, parameter_registry) when is_binary(pattern) do
+    {:cucumber_expression, CucumberExpression.compile(pattern, parameter_registry)}
+  end
+
+  @doc """
   Matches `text` against a `classify/2` result, returning a uniform match shape.
 
     * no match → `nil`;

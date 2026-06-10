@@ -49,6 +49,34 @@ defmodule Cabbage.StepPatternTest do
     end
   end
 
+  describe "classify_expression/2 (Messages-layer policy)" do
+    test "a braceless binary is still a cucumber expression (unlike classify/2)" do
+      assert {:cucumber_expression, %CucumberExpression{} = expr} =
+               StepPattern.classify_expression("an action", registry())
+
+      assert expr.source == "an action"
+      # classify/2 (Feature policy) would route the same braceless binary to a regex.
+      assert {:regex, %Regex{}} = classify("an action")
+    end
+
+    test "a braces binary classifies as a cucumber expression" do
+      assert {:cucumber_expression, %CucumberExpression{}} =
+               StepPattern.classify_expression("I have {int} cukes in my belly", registry())
+    end
+
+    test "an anonymous {} parameter classifies as a cucumber expression" do
+      assert {:cucumber_expression, %CucumberExpression{} = expr} =
+               StepPattern.classify_expression("I have {} cukes", registry())
+
+      assert StepPattern.match({:cucumber_expression, expr}, "I have x cukes") == {:ok, ["x"]}
+    end
+
+    test "a regex passes through verbatim" do
+      regex = ~r/^a (.*?)(?: and a (.*?))?$/
+      assert {:regex, ^regex} = StepPattern.classify_expression(regex, registry())
+    end
+  end
+
   describe "match/2 — cucumber expressions" do
     test "returns {:ok, positional_list} of transformed args" do
       assert StepPattern.match(classify("I have {int} cukes"), "I have 42 cukes") == {:ok, [42]}

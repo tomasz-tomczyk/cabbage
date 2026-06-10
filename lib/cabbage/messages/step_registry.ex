@@ -176,12 +176,19 @@ defmodule Cabbage.Messages.StepRegistry do
   end
 
   defp build_definition(registry, pattern, fun, opts) when is_binary(pattern) do
-    # Detect a reference to an unregistered `{type}` *before* compiling (which would
-    # raise). Such a step is "effectively undefined": record the offending type for the
-    # `undefinedParameterType` message and mark the definition so it never matches.
+    # Messages-layer policy: every *binary* is a Cucumber Expression (reported
+    # CUCUMBER_EXPRESSION), even a parameter-free one like "an action" — unlike the
+    # Feature layer, which treats a braceless binary as a literal regex. So the
+    # binary-vs-regex dispatch stays here. What is shared with the Feature layer is the
+    # expression *compilation*, routed through `Cabbage.StepPattern.classify_expression/2`
+    # (which compiles the source against this registry's parameter types and tags it).
+    #
+    # Detect a reference to an unregistered `{type}` *before* classifying (which would
+    # raise on compile). Such a step is "effectively undefined": record the offending
+    # type for the `undefinedParameterType` message and mark the def so it never matches.
     case first_undefined_parameter_type(registry, pattern) do
       nil ->
-        compiled = CucumberExpression.compile(pattern, registry.parameter_registry)
+        {:cucumber_expression, compiled} = Cabbage.StepPattern.classify_expression(pattern, registry.parameter_registry)
 
         definition = %StepDefinition{
           pattern_kind: :cucumber_expression,
@@ -216,10 +223,12 @@ defmodule Cabbage.Messages.StepRegistry do
   end
 
   defp build_definition(registry, %Regex{} = pattern, fun, opts) do
+    {:regex, regex} = Cabbage.StepPattern.classify_expression(pattern, registry.parameter_registry)
+
     definition = %StepDefinition{
       pattern_kind: :regular_expression,
-      source: Regex.source(pattern),
-      compiled: pattern,
+      source: Regex.source(regex),
+      compiled: regex,
       fun: fun,
       uri: opts[:uri],
       line: opts[:line]
