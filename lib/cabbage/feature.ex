@@ -511,12 +511,58 @@ defmodule Cabbage.Feature do
     add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defgiven))
   end
 
+  defmacro defgiven(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defgiven))
+  end
+
   defmacro defwhen(regex, vars, state, do: block) do
     add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defwhen))
   end
 
+  defmacro defwhen(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defwhen))
+  end
+
   defmacro defthen(regex, vars, state, do: block) do
     add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defthen))
+  end
+
+  defmacro defthen(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defthen))
+  end
+
+  @doc """
+  Registers a step definition. Keyword-neutral form of `defgiven/4`/`defwhen/4`/`defthen/4`.
+
+  Matching is by pattern only, so a `defstep` matches any Gherkin keyword (Given/When/Then/And/But).
+  """
+  defmacro defstep(regex, vars, state, do: block) do
+    add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defstep))
+  end
+
+  @doc """
+  Registers a step definition without binding matched data. `vars` defaults to ignore.
+
+  Every step macro has this `/3` short form: pattern, state, `do:` block.
+  """
+  defmacro defstep(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defstep))
+  end
+
+  defmacro defand(regex, vars, state, do: block) do
+    add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defand))
+  end
+
+  defmacro defand(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defand))
+  end
+
+  defmacro defbut(regex, vars, state, do: block) do
+    add_step(__CALLER__.module, regex, vars, state, block, metadata(__CALLER__, :defbut))
+  end
+
+  defmacro defbut(regex, state, do: block) do
+    add_step(__CALLER__.module, regex, Macro.var(:_, __MODULE__), state, block, metadata(__CALLER__, :defbut))
   end
 
   @doc """
