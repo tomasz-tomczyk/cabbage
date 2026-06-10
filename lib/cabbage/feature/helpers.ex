@@ -66,7 +66,7 @@ defmodule Cabbage.Feature.Helpers do
     ]
   end
 
-  # Applies a step block's return value to the threaded context (decision D3):
+  # Applies a step block's return value to the threaded context (the state contract):
   #
   #   :ok | nil          -> context unchanged
   #   {:ok, map}         -> Map.merge(context, map)        (delta-merge; back-compat)

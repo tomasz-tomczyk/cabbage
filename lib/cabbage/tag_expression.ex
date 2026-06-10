@@ -49,8 +49,11 @@ defmodule Cabbage.TagExpression do
 
   alias Cabbage.TagExpression.{And, Literal, Not, Or, Parser, True}
 
-  @typedoc "A parsed tag expression node. Opaque — build it with `parse/1`."
-  @type t :: True.t() | Literal.t() | Not.t() | And.t() | Or.t()
+  @typedoc """
+  A parsed tag expression node. Opaque — build it with `parse/1` and consume it
+  with `evaluate/2` or `to_string/1`; do not depend on the internal node shape.
+  """
+  @opaque t :: True.t() | Literal.t() | Not.t() | And.t() | Or.t()
 
   @doc """
   Parse a tag expression string into an AST node.

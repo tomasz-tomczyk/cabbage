@@ -51,7 +51,7 @@ defmodule Cabbage.FeatureExecutionTest do
       {result, output} = CabbageTestHelper.run()
       assert result == %{failures: 1, skipped: 0, total: 1, excluded: 0}
       # `{:ok, _}` only merges when the payload is a map; a keyword list is not, so
-      # the D3 contract fails loudly naming the step and the offending return.
+      # the state contract fails loudly naming the step and the offending return.
       assert output =~ "I provide Then"
       assert output =~ "[some: :some]"
       assert output =~ ":ok | nil | a map | {:ok, map}"

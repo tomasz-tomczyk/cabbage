@@ -1,6 +1,6 @@
 Code.require_file("test_helper.exs", __DIR__)
 
-# T3: a step's gherkin table and doc string are reachable from the context map
+# A step's gherkin table and doc string are reachable from the context map
 # under the reserved keys `:__table__` / `:__doc_string__`. This is the uniform
 # path that also works for cucumber-expression (string-pattern) steps, whose
 # matched data is a positional list with no room for named `:table`/`:doc_string`.

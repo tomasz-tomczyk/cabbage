@@ -8,7 +8,7 @@ defmodule Cabbage.Steps do
       defmodule MyApp.SharedSteps do
         use Cabbage.Steps
 
-        defstep "I am logged in as {string}", [user] do
+        defstep "I am logged in as {string}", [user], _ctx do
           {:ok, %{user: user}}
         end
       end

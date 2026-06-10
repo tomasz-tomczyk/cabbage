@@ -34,60 +34,93 @@ Feature: Serve coffee
     Then I should be served a coffee
 ```
 
-Translate each line to a step by `use`-ing `Cabbage.Feature` and providing `defgiven/4`,
-`defwhen/4`, and `defthen/4` step definitions. Inside `test/features/coffee_test.exs`:
+Steps that recur across features go in a shared `Cabbage.Steps` library (a module
+that defines no tests). Inside `test/support/coffee_steps.ex`:
+
+```elixir
+defmodule MyApp.CoffeeSteps do
+  use Cabbage.Steps
+
+  # A string Cucumber Expression binds its matched data as a positional *list* of
+  # already-transformed arguments — here `{int}` arrives as an integer, not a string.
+  # (To match a literal `{`, escape it: `"\\{weird\\}"` matches the text `{weird}`.)
+  defstep "there are {int} coffees left in the machine", [count], _ctx do
+    {:ok, %{machine: Machine.put_coffee(Machine.new(), count)}}
+  end
+end
+```
+
+The per-feature module `use`s `Cabbage.Feature`, imports the shared library, and
+defines its local steps. Inside `test/features/coffee_test.exs`:
 
 ```elixir
 defmodule MyApp.Features.CoffeeTest do
-  # Options other than `file:` are passed directly to `ExUnit`.
-  use Cabbage.Feature, async: false, file: "coffee.feature"
+  # Options other than `:file`/`:import` are passed directly to ExUnit.
+  use Cabbage.Feature, async: true, file: "coffee.feature", import: [MyApp.CoffeeSteps]
 
-  # `setup/1` runs prior to each scenario; `setup_all/1` runs once for the suite.
+  # `setup/1` runs before each scenario; its return value is the initial context.
   setup do
-    on_exit fn ->
-      IO.puts "Scenario completed, cleanup stuff"
-    end
-    %{my_starting: :state, user: %User{}} # Beginning state
+    %{user: %User{}}
   end
 
-  # `defgiven/4`, `defwhen/4` and `defthen/4` take a pattern, the matched data,
-  # the current state, and a block. A pattern is either a regex or a string
-  # Cucumber Expression.
-  #
-  # A regex binds its matched data as a *map* of named captures (string values):
-  defgiven ~r/^there (is|are) (?<number>\d+) coffee(s) left in the machine$/, %{number: number}, %{user: user} do
-    # Returning `{:ok, map}` merges into the scenario state; anything else leaves it unchanged.
-    {:ok, %{machine: Machine.put_coffee(Machine.new, String.to_integer(number))}}
+  # A regex binds its matched data as a *map* of named captures (string values).
+  defgiven ~r/^I have deposited £(?<amount>\d+)$/, %{amount: amount}, %{user: user, machine: machine} do
+    {:ok, %{machine: Machine.deposit(machine, user, String.to_integer(amount))}}
   end
 
-  # A Cucumber Expression binds its matched data as a positional *list* of
-  # already-transformed arguments — here `{int}` arrives as an integer, not a string.
-  # (To match a literal `{`, escape it: `"\\{weird\\}"` matches the text `{weird}`.)
-  defgiven "I have deposited £{int}", [amount], %{user: user, machine: machine} do
-    {:ok, %{machine: Machine.deposit(machine, user, amount)}} # State is merged, so `user` is kept
+  defwhen "I press the coffee button", _vars, ctx do
+    Machine.press_coffee(ctx.machine)
   end
 
-  # With no captures, the matched map is empty. State is unchanged here.
-  defwhen ~r/^I press the coffee button$/, _, state do
-    Machine.press_coffee(state.machine)
-  end
-
-  defthen ~r/^I should be served a coffee$/, _, state do
-    assert %Coffee{} = Machine.take_drink(state.machine) # Assert inside `defthen/4`
+  defthen "I should be served a coffee", _vars, ctx do
+    assert %Coffee{} = Machine.take_drink(ctx.machine)
   end
 end
 ```
 
 The compiled test is logically equivalent to a hand-written ExUnit case: each scenario
-becomes one `test`, with state threaded from step to step.
+becomes one `test`, with the context threaded from step to step. This gives the best of
+both worlds: feature files for non-technical stakeholders, and a real Elixir test file
+for the developers who maintain them.
 
-This provides the best of both worlds: feature files for non-technical users, and an actual
-test file written in Elixir for developers who maintain them.
+### Steps match by pattern, not keyword
+
+A step matches a feature line by its **pattern only** — the `Given`/`When`/`Then`/`And`/`But`
+keyword is never part of matching. `defstep` is the canonical, keyword-neutral macro;
+`defgiven`/`defwhen`/`defthen`/`defand`/`defbut` are readability aliases that register
+identically. A `defstep` can match a `Given` line and a `defgiven` can match a `Then` line.
+
+### State contract
+
+A step's return value drives the context threaded to the next step:
+
+| Return value       | Effect on the context                                  |
+| ------------------ | ------------------------------------------------------ |
+| `:ok` or `nil`     | context unchanged                                      |
+| `{:ok, map}`       | `Map.merge(context, map)` — delta-merge (recommended)  |
+| a bare `map`       | **replaces** the context with that map                 |
+| `{:error, reason}` | the step fails (raises, naming the step and reason)    |
+| anything else      | the step fails (raises, naming the step and the value) |
+
+`{:ok, %{...}}` is the everyday form — add or change just the keys you name. A bare map
+is the whole-world form — it replaces the entire context (use it to reset state). The
+context must be a plain map; returning a struct (bare or `{:ok, struct}`) raises. A
+non-conforming return no longer silently keeps the context, so a step can never quietly
+no-op a state update.
 
 ### Tables & Doc Strings
 
-Tables and Doc Strings are provided to step definitions under the `:table` and `:doc_string`
-variables. See the dynamic-data example in
+A step's gherkin **data table** and **doc string** are reachable from the context under
+the reserved keys `ctx.__table__` and `ctx.__doc_string__` (the empty list / empty string
+when absent). They are injected per step and never threaded forward.
+
+```elixir
+defwhen "I submit:", _vars, ctx do
+  {:ok, %{submitted: ctx.__table__}}
+end
+```
+
+See the dynamic-data example in
 [test/feature_execution_test.exs](test/feature_execution_test.exs) and
 [test/features/dynamic.feature](test/features/dynamic.feature).
 

@@ -1,6 +1,6 @@
 Code.require_file("test_helper.exs", __DIR__)
 
-# The full step-return state contract (decision D3), enabled by T6:
+# The full step-return state contract:
 #
 #   :ok | nil          -> context unchanged
 #   a map              -> REPLACES the context with that map

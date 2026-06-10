@@ -3,8 +3,12 @@
 ## 1.0.0
 
 Cabbage graduates to `1.0.0`. The internals are a ground-up rewrite onto a
-spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
-**public macro API you write against is unchanged** — see "Unchanged" below.
+spec-conformant Gherkin pipeline and a cucumber-messages runner, and the step
+API is overhauled: keyword-agnostic step macros, shared `Cabbage.Steps`
+libraries, string Cucumber Expressions, and an explicit step state contract.
+Most existing 0.4.1 step modules still compile and run; the one behavioural
+change to audit is the state contract (see Breaking). See
+[UPGRADING.md](UPGRADING.md).
 
 ### Breaking
 
@@ -38,32 +42,52 @@ spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
   `fetch_state/2`, `update_state/3`, and `agent_name/2` (the module is
   `@moduledoc false`). Step code never called these; only code reaching into
   cabbage internals or relying on the per-scenario Agent process is affected.
+- **Explicit step state contract; silent-keep removed.** A step's return value
+  now drives the context by an explicit rule: `:ok`/`nil` keep it, `{:ok, map}`
+  merges (delta-merge, the everyday form), a bare `map` **replaces** it, and
+  `{:error, reason}` or any non-conforming value **raises** (naming the step). The
+  `{:ok, map}` merge that every 0.4.1 step uses is unchanged, so most modules need
+  no edits. The behavioural change to audit: a step that previously returned a
+  stray non-conforming value and relied on the old contract *silently keeping*
+  state now raises — add an explicit `:ok` to such steps. Returning a struct (bare
+  or `{:ok, struct}`) also raises: the context must be a plain map. The reserved
+  context keys `:__table__`/`:__doc_string__` are stripped from threaded state.
 
 ### Changed
 
 - **Scenario state is now threaded as a value, not held in an `Agent`.** The
   `Feature` runner compiles each step to a `fn context -> next_context end` and
-  threads the scenario's state through them with a reduce. Previously state lived
+  threads the scenario's context through them with a reduce. Previously state lived
   in a per-scenario `Agent` registered under a global name.
   - **`async: true` is now safe by construction.** The old global Agent name
     (`cabbage_integration_test-<scenario>-<module>`) could collide and leak state
     between same-named scenarios / re-runs; threaded state is per-invocation.
   - **No more leaked processes.** The Agent was started and never stopped.
-  - The public step API is **unchanged**: `defgiven/defwhen/defthen(regex, vars,
-    state, do: block)`, the `{:ok, delta}` merge return, assertion-only steps that
-    return nothing, tags, `setup`/`setup_all` seeding, data tables and doc strings
-    all behave exactly as before.
 
-### Unchanged (source-compatible)
+### Source-compatible
 
-- The public macro API is **byte-for-byte unchanged** — existing step
-  definitions compile as-is:
-  - `use Cabbage.Feature, file: ..., template: ...`
-  - `defgiven/2`, `defwhen/2`, `defthen/2`
-  - `import_feature/1`, `import_steps/1`, `import_tags/1`
-  - `tag/2`
+- Existing step definitions compile as-is — `use Cabbage.Feature, file: ...,
+  template: ...`, `defgiven`/`defwhen`/`defthen`, `import_feature/1`,
+  `import_steps/1`, `import_tags/1`, and `tag/2` are all retained — provided steps
+  return a contract-conforming value (`:ok`/`nil`/`{:ok, map}`/a map). See the state
+  contract under Breaking.
 
 ### Added
+
+- **Keyword-agnostic step macros.** `defstep/3,4` is the canonical, keyword-neutral
+  step macro; matching is by **pattern only** (the `Given`/`When`/`Then` keyword
+  never gates a match). `defgiven`/`defwhen`/`defthen` are kept and `defand`/`defbut`
+  are added, all as readability aliases that register identically.
+- **`Cabbage.Steps` — shared step libraries.** `use Cabbage.Steps` builds a module
+  of reusable step definitions that is *not* an ExUnit case and generates no tests.
+  Import it into a feature with `use Cabbage.Feature, ..., import: [Mod, ...]`. Local
+  steps win first-match on a same-pattern collision; imported steps follow in a
+  deterministic order; importing a non-step module raises a clear error; step
+  libraries compose transitively.
+- **Reserved context keys for tables/doc strings.** A step's gherkin data table and
+  doc string are reachable from the context as `ctx.__table__` and
+  `ctx.__doc_string__` (empty list / empty string when absent), injected per step and
+  not threaded forward — the uniform path for Cucumber Expression steps.
 
 - **Pickle-based execution.** Background prepending, `Rule` flattening, and
   Scenario Outline expansion now come "for free" from the gherkin pickle
@@ -81,6 +105,11 @@ spec-conformant Gherkin pipeline and a cucumber-messages runner, but the
   public custom-parameter-type API for `Cabbage.Feature`.)
 - **Tag Expressions engine** (`and`/`or`/`not`/parentheses), validated at
   **64/64** against the upstream tag-expressions corpus.
+- **Shared pattern core (`Cabbage.StepPattern`).** Pattern classification (regex
+  vs Cucumber Expression vs literal) and match extraction are factored into one
+  internal module used by both the `Cabbage.Feature` compile-time runner and the
+  `Cabbage.Messages` runtime runner, removing duplicated matching logic. (The two
+  execution paths remain separate; full convergence is a future release.)
 - **cucumber-messages runner** (`Cabbage.Messages`) with hooks, attachments,
   retry, and parameter-types support — validated at **43/44** against the
   Cucumber Compatibility Kit (CCK) (the 44th asserts a run-level crash and is

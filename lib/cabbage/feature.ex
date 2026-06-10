@@ -23,62 +23,71 @@ defmodule Cabbage.Feature do
 
   ## Features
 
-  Given a feature file, create a corresponding feature module which references it. Heres an example:
+  Write the feature file, a shared step library, and a per-feature test module.
+  Given `test/features/coffee.feature`:
 
-      defmodule MyApp.SomeFeatureTest do
-        use Cabbage.Feature, file: "some_feature.feature"
+      Feature: Serve coffee
+        Scenario: Buy last coffee
+          Given there are 1 coffees left in the machine
+          And I have deposited £1
+          When I press the coffee button
+          Then I should be served a coffee
 
-        defgiven ~r/I am given a given statement/, _matched_data, _current_state do
-          assert 1 + 1 == 2
-          {:ok, %{new: :state}}
+  Steps reused across features live in a `Cabbage.Steps` module:
+
+      defmodule MyApp.SharedSteps do
+        use Cabbage.Steps
+
+        # A string Cucumber Expression; `{int}` arrives as an integer in the
+        # positional matched-data list.
+        defstep "there are {int} coffees left in the machine", [count], _ctx do
+          {:ok, %{machine: Machine.put_coffee(Machine.new(), count)}}
+        end
+      end
+
+  The per-feature module `use`s `Cabbage.Feature`, imports the shared library,
+  and defines whatever steps are local to it:
+
+      defmodule MyApp.CoffeeTest do
+        # Options other than `:file`/`:import` are passed straight to ExUnit.
+        use Cabbage.Feature, async: true, file: "coffee.feature", import: [MyApp.SharedSteps]
+
+        # `setup/1` runs before each scenario; its return value is the initial context.
+        setup do
+          %{user: %User{}}
         end
 
-        # Patterns may also be string Cucumber Expressions; `{int}` arrives as an
-        # integer in the positional matched-data list.
-        defwhen "I when execute it {int} times", [times], _current_state do
-          assert times >= 0
-          nil
+        # A regex binds its matched data as a map of named captures (string values).
+        defgiven ~r/^I have deposited £(?<amount>\d+)$/, %{amount: amount}, %{user: user, machine: machine} do
+          {:ok, %{machine: Machine.deposit(machine, user, String.to_integer(amount))}}
         end
 
-        defthen ~r/everything is ok/, _matched_data, _current_state do
-          assert true
-          :ok
+        defwhen "I press the coffee button", _vars, ctx do
+          Machine.press_coffee(ctx.machine)
+        end
+
+        defthen "I should be served a coffee", _vars, ctx do
+          assert %Coffee{} = Machine.take_drink(ctx.machine)
         end
       end
 
-  This translates loosely into:
+  Each scenario compiles to one ExUnit `test`, with the context threaded from
+  step to step. Run it under plain `mix test`.
 
-      defmodule MyApp.SomeFeatureTest do
-        use ExUnit.Case
+  ### Steps are keyword-agnostic
 
-        test "The name of the scenario here" do
-          assert 1 + 1 == 2
-          nil
-          assert true
-          :ok
-        end
-      end
+  A step matches a feature line by its **pattern only** — the keyword
+  (`Given`/`When`/`Then`/`And`/`But`) is never part of matching. `defstep/3,4` is
+  the canonical, keyword-neutral macro; `defgiven`/`defwhen`/`defthen`/`defand`/`defbut`
+  are readability aliases that register identically. Use whichever reads best at
+  the definition site — a `defstep` can match a `Given` line and a `defgiven` can
+  match a `Then` line.
 
   ### Step Patterns
 
-  The first argument to `defgiven/4`, `defwhen/4` and `defthen/4` is a *pattern*.
-  It may be either a `~r/regex/` or a string Cucumber Expression. The two differ
-  only in how the matched data (the second argument) is shaped.
-
-  ### Extracting Matched Data
-
-  You'll likely have data within your feature statements which you want to extract.
-
-  A **regex** binds its matched data as a *map of named captures* (the values are
-  always strings):
-
-      # NOTICE THE `number` VARIABLE IS STILL A STRING!!
-      defgiven ~r/^there (is|are) (?<number>\d+) widget(s?)$/, %{number: number}, _state do
-        assert String.to_integer(number) >= 1
-        :ok
-      end
-
-  For every named capture, you'll have a key as an atom in the second parameter. You can then use those variables you create within your block.
+  The first argument to every step macro is a *pattern*. It may be either a string
+  Cucumber Expression or a `~r/regex/`. The two differ only in how the matched data
+  (the second argument) is shaped.
 
   A **Cucumber Expression** (any string pattern containing a `{...}` parameter)
   binds its matched data as a *positional list* of already-transformed arguments.
@@ -86,30 +95,42 @@ defmodule Cabbage.Feature do
   `{float}` as a float, `{string}`/`{word}` as a string:
 
       # `count` is an INTEGER, already transformed by the {int} parameter type.
-      defgiven "there are {int} widgets", [count], _state do
+      defstep "there are {int} widgets", [count], _ctx do
         assert count >= 1
         :ok
       end
 
-  Cucumber Expression arguments are positional, so the second argument is a list
-  whose elements line up with the `{...}` parameters left to right. (Tables and
-  doc strings are not Cucumber Expression parameters; use a regex named capture
-  if you need to bind them.) To match a literal `{`, escape it with a backslash:
+  Arguments are positional, so the second argument is a list whose elements line up
+  with the `{...}` parameters left to right. A string with no `{...}` parameter is
+  matched as an exact literal. To match a literal `{`, escape it with a backslash:
   `"\\\\{weird\\\\}"` in Elixir source matches the text `{weird}` instead of being
   parsed as a parameter.
 
+  A **regex** binds its matched data as a *map of named captures* (the values are
+  always strings):
+
+      # NOTICE THE `number` VARIABLE IS STILL A STRING!!
+      defgiven ~r/^there (is|are) (?<number>\d+) widget(s?)$/, %{number: number}, _ctx do
+        assert String.to_integer(number) >= 1
+        :ok
+      end
+
+  For every named capture you get a key (as an atom) in the second-parameter map.
+
   > #### `{name:type}` is not supported {: .warning}
   >
-  > The non-spec `{name:type}` named-capture sugar (e.g. `{count:int}`) was removed
-  > in 1.0.0. Such a pattern reaches the spec engine and raises an
-  > `Undefined parameter type 'count:int'` compile error. Use a regex named capture
-  > (`~r/(?<count>\d+)/`) to bind by name, or the spec `{int}` to bind positionally.
+  > The non-spec `{name:type}` named-capture sugar (e.g. `{count:int}`) is not part
+  > of the Cucumber Expressions spec. Such a pattern reaches the spec engine and
+  > raises an `Undefined parameter type 'count:int'` compile error. Use a regex named
+  > capture (`~r/(?<count>\d+)/`) to bind by name, or the spec `{int}` to bind
+  > positionally.
 
   ### Modifying State
 
-  You'll likely have to keep track of some state in between statements. The third parameter to each of `defgiven/4`, `defwhen/4` and `defthen/4` is a pattern in which specifies what you want to call your state in the same way that the `ExUnit.Case.test/3` macro works.
-
-  You can setup initial state using plain ExUnit `setup/1` and `setup_all/1`. Whatever state is provided via the `test/3` macro will be your initial state.
+  The third parameter to every step macro is a pattern that binds the current
+  context, exactly as the `ExUnit.Case.test/3` macro binds its context. Seed the
+  initial context with plain ExUnit `setup/1` and `setup_all/1`; whatever they
+  return is the starting context for the scenario.
 
   A step's **return value drives the context** for the next step. The contract:
 
@@ -163,49 +184,45 @@ defmodule Cabbage.Feature do
         {:ok, %{submitted: ctx.__table__}}
       end
 
-  ### Organizing Features
+  ### Sharing steps with `Cabbage.Steps`
 
-  You may want to reuse several statements you create, especially ones that deal with global logic like users and logging in.
+  Steps that recur across features — logging in, seeding fixtures, common
+  assertions — belong in a `Cabbage.Steps` module: a step library that is **not**
+  an ExUnit case and generates no tests.
 
-  Feature modules can be created without referencing a file. This makes them do nothing except hold translations between steps in a scenario and test code to be included into a test. These modules must be compiled prior to running the test suite, so for that reason you must add them to the `elixirc_paths` in your `mix.exs` file, like so:
+      defmodule MyApp.SharedSteps do
+        use Cabbage.Steps
 
-      defmodule MyApp.Mixfile do
-        use Mix.Project
-
-        def project do
-          [
-            app: :my_app,
-            ... # Add this to your project function
-            elixirc_paths: elixirc_paths(Mix.env),
-            ...
-          ]
+        defstep "I am logged in as {string}", [user], _ctx do
+          {:ok, %{user: user}}
         end
-
-        # Specifies which paths to compile per environment.
-        defp elixirc_paths(:test), do: ["lib", "test/support"]
-        defp elixirc_paths(_),     do: ["lib"]
-
-        ...
       end
 
-  If you're using Phoenix, this should already be setup for you. Simply place a file like the following into `test/support`.
+  Pull it into a feature module with the `:import` option, which accepts a list:
 
-      defmodule MyApp.GlobalFeatures do
-        use Cabbage.Feature
+      defmodule MyApp.CheckoutTest do
+        use Cabbage.Feature, file: "checkout.feature", import: [MyApp.SharedSteps]
 
-        # Write your `defgiven/4`, `defthen/4` and `defwhen/4`s here
+        # Local steps here. On a same-pattern collision the local step wins;
+        # imported steps are appended after in a deterministic order.
       end
 
-  Then inside the test file (the .exs one) add a `import_feature MyApp.GlobalFeatures` line after the `use Cabbage.Feature` line lke so:
+  Imported modules must be compiled before the feature that imports them, so place
+  them under a path that compiles first — for ExUnit projects that is `test/support`
+  (which Phoenix already configures):
 
-      defmodule MyApp.SomeFeatureTest do
-        use Cabbage.Feature, file: "some_feature.feature"
-        import_feature MyApp.GlobalFeatures
+      defp elixirc_paths(:test), do: ["lib", "test/support"]
+      defp elixirc_paths(_),     do: ["lib"]
 
-        # Omitted the rest
-      end
+  Step libraries compose transitively: a `Cabbage.Steps` module may itself import
+  other step modules. For finer-grained control, the `import_steps/1`,
+  `import_tags/1`, and `import_feature/1` macros (the last is `import_steps` +
+  `import_tags`) are available inside a feature or step module. A file-less
+  `use Cabbage.Feature` module is also a valid import source for back-compatibility,
+  but `use Cabbage.Steps` is the intended way to write a step library — it does not
+  drag `ExUnit.Case` into a module that defines no tests.
 
-  Keep in mind that if you'd like to be more explicit about what you bring into your test, you can use the macros `import_steps/1` and `import_tags/1`. This will allow you to be more selective about whats getting included into your integration tests. The `import_feature/1` macro simply calls both the `import_steps/1` and `import_tags/1` macros.
+  See `Cabbage.Steps` for details.
 
   ## Options
 
@@ -396,7 +413,7 @@ defmodule Cabbage.Feature do
 
   Used at compile time by `__before_compile__/1`; `steps` is the list of registered step
   definition ASTs. The returned function receives the current scenario state, runs the matched
-  step block, and returns the next state per the D3 return contract (see the moduledoc):
+  step block, and returns the next state per the state contract (see the moduledoc):
   `:ok`/`nil` keep it, `{:ok, map}` merges, a bare map replaces, anything else raises.
   `__before_compile__/1` threads these functions with a reduce, so scenario state is a plain
   value rather than process state.

@@ -10,6 +10,9 @@ defmodule Cabbage.CucumberExpression.Errors do
   defmodule CucumberExpressionError do
     @moduledoc "Base error for all Cucumber Expression problems."
     defexception [:message]
+
+    @typedoc "A Cucumber Expression error exception struct."
+    @type t :: %__MODULE__{message: String.t()}
   end
 
   @doc """
