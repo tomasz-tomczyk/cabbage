@@ -415,18 +415,21 @@ defmodule Cabbage.Feature do
          step,
          step_type
        ) do
+    classified = eval_pattern(pattern)
+
     matched_data =
-      case eval_pattern(pattern) do
-        {:regex, regex} ->
-          extract_named_vars(regex, step.text)
+      case {classified, Cabbage.StepPattern.match(classified, step.text)} do
+        {{:regex, _regex}, {:ok, captures}} ->
+          captures
+          |> atomize_keys()
           |> Map.merge(%{table: step.table_data, doc_string: step.doc_string})
 
         # Cucumber Expression arguments are positional and already transformed
         # (`{int}` -> integer, `{string}` -> string, ...); they bind as a list,
         # not a named-captures map. Table/doc-string are not spec parameters, so
         # they are not injected here — use a regex named capture if you need them.
-        {:cucumber_expression, expression} ->
-          Cabbage.CucumberExpression.match(expression, step.text)
+        {{:cucumber_expression, _expression}, {:ok, values}} ->
+          values
       end
 
     # Reserved context keys exposing this step's gherkin table/doc-string. Injected
@@ -500,10 +503,7 @@ defmodule Cabbage.Feature do
 
   # Does `step`'s text match a registered step definition's pattern?
   defp step_matches?(step, {:{}, _, [pattern, _, _, _, _]}) do
-    case eval_pattern(pattern) do
-      {:regex, regex} -> step.text =~ regex
-      {:cucumber_expression, expression} -> Cabbage.CucumberExpression.match(expression, step.text) != nil
-    end
+    Cabbage.StepPattern.match(eval_pattern(pattern), step.text) != nil
   end
 
   defp find_implementation_of_step(step, steps), do: Enum.find(steps, &step_matches?(step, &1))
@@ -554,11 +554,11 @@ defmodule Cabbage.Feature do
     end
   end
 
-  defp extract_named_vars(regex, step_text) do
-    regex
-    |> Regex.named_captures(step_text)
-    |> Enum.map(fn {k, v} -> {String.to_atom(k), v} end)
-    |> Enum.into(%{})
+  # The shared matcher returns string-keyed named captures; the Feature surface binds
+  # them as atom keys (so a step's `vars` pattern can destructure `%{number: number}`).
+  # Capture values stay strings.
+  defp atomize_keys(captures) do
+    Map.new(captures, fn {k, v} -> {String.to_atom(k), v} end)
   end
 
   @doc """

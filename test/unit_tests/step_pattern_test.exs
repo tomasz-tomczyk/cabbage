@@ -48,4 +48,74 @@ defmodule Cabbage.StepPatternTest do
       end
     end
   end
+
+  describe "match/2 — cucumber expressions" do
+    test "returns {:ok, positional_list} of transformed args" do
+      assert StepPattern.match(classify("I have {int} cukes"), "I have 42 cukes") == {:ok, [42]}
+    end
+
+    test "a zero-parameter expression that matches returns {:ok, []} (NOT nil)" do
+      # A parameter-free string classifies as a literal regex, so to exercise the
+      # cucumber-expression branch's empty-match we compile one directly. The engine
+      # returns [] (not nil) for a successful zero-parameter match; match/2 must
+      # preserve that as {:ok, []}.
+      expr = CucumberExpression.compile("a step passes", registry())
+      assert StepPattern.match({:cucumber_expression, expr}, "a step passes") == {:ok, []}
+    end
+
+    test "returns nil for no match" do
+      assert StepPattern.match(classify("I have {int} cukes"), "totally unrelated") == nil
+    end
+
+    test "transforms the built-in {float}, {word} and {string} types" do
+      assert StepPattern.match(classify("pi is about {float}"), "pi is about 3.14") == {:ok, [3.14]}
+      assert StepPattern.match(classify("a {word} thing"), "a small thing") == {:ok, ["small"]}
+      assert StepPattern.match(classify("say {string} loud"), ~s(say "hi" loud)) == {:ok, ["hi"]}
+    end
+
+    test "binds multiple {...} parameters positionally, left to right" do
+      assert StepPattern.match(classify("from {string} to {string}"), ~s(from "A" to "B")) ==
+               {:ok, ["A", "B"]}
+    end
+
+    test "a custom parameter type transforms through its registry" do
+      registry =
+        ParameterTypeRegistry.new()
+        |> ParameterTypeRegistry.define(
+          Cabbage.CucumberExpression.ParameterType.new(
+            name: "flight",
+            regexps: [~r/([A-Z]{3})-([A-Z]{3})/],
+            transform: fn [from, to] -> %{from: from, to: to} end
+          )
+        )
+
+      classified = StepPattern.classify("{flight} has been delayed", registry)
+      assert StepPattern.match(classified, "LHR-CDG has been delayed") == {:ok, [%{from: "LHR", to: "CDG"}]}
+    end
+  end
+
+  describe "match/2 — regex" do
+    test "returns {:ok, string-keyed named-captures map}" do
+      assert StepPattern.match({:regex, ~r/(?<n>\d+)/}, "I have 42 cukes") == {:ok, %{"n" => "42"}}
+    end
+
+    test "multiple named captures all come back as strings" do
+      classified = {:regex, ~r/^a (?<first>.*?) and a (?<second>.*?)$/}
+      assert StepPattern.match(classified, "a x and a y") == {:ok, %{"first" => "x", "second" => "y"}}
+    end
+
+    test "a successful zero-capture regex match returns {:ok, %{}} (NOT nil)" do
+      assert StepPattern.match({:regex, ~r/^a step$/}, "a step") == {:ok, %{}}
+    end
+
+    test "returns nil for no match" do
+      assert StepPattern.match({:regex, ~r/(?<n>\d+)/}, "no digits here") == nil
+    end
+
+    test "an exact-literal classified regex matches only its literal text" do
+      classified = classify("plain $literal")
+      assert StepPattern.match(classified, "plain $literal") == {:ok, %{}}
+      assert StepPattern.match(classified, "plain $literalX") == nil
+    end
+  end
 end

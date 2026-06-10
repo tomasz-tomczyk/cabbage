@@ -61,4 +61,32 @@ defmodule Cabbage.StepPattern do
         {:regex, Regex.compile!("^" <> Regex.escape(pattern) <> "$")}
     end
   end
+
+  @doc """
+  Matches `text` against a `classify/2` result, returning a uniform match shape.
+
+    * no match → `nil`;
+    * a regex match → `{:ok, named_captures_map}` — `Regex.named_captures/2`'s
+      string-keyed, string-valued map (`%{}` when the regex has no named captures);
+    * a Cucumber Expression match → `{:ok, positional_list}` — the transformed
+      argument values, left to right (`[]` for a zero-parameter expression).
+
+  Note the `{:ok, %{}}` / `{:ok, []}` results: a successful match that captured
+  nothing is still a match and is preserved as `{:ok, _}`, distinct from `nil`.
+  """
+  @spec match(classified(), String.t()) :: {:ok, map() | [any()]} | nil
+  def match({:regex, regex}, text) do
+    if text =~ regex do
+      {:ok, Regex.named_captures(regex, text)}
+    else
+      nil
+    end
+  end
+
+  def match({:cucumber_expression, expression}, text) do
+    case CucumberExpression.match(expression, text) do
+      nil -> nil
+      values -> {:ok, values}
+    end
+  end
 end
