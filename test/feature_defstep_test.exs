@@ -33,6 +33,7 @@ defmodule Cabbage.FeatureDefstepTest do
       # `defgiven` matches the `Then` pickle step.
       defgiven ~r/^I provide Then$/, _vars, %{count: count} do
         assert count == 3
+        :ok
       end
     end
 

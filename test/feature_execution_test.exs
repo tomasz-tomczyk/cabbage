@@ -13,7 +13,10 @@ defmodule Cabbage.FeatureExecutionTest do
         end
 
         defgiven ~r/^I provide Given$/, _vars, %{state: state} do
-          [:given | state]
+          # A non-`{:ok, map}` step keeps the context unchanged; we discard the
+          # computed list and return :ok so the next step still sees [:initial].
+          _ = [:given | state]
+          :ok
         end
 
         defgiven ~r/^I provide And$/, _vars, %{state: state} do
@@ -28,6 +31,7 @@ defmodule Cabbage.FeatureExecutionTest do
 
         defthen ~r/^I provide Then$/, _vars, %{state: state} do
           assert state == [:initial]
+          :ok
         end
       end
 
@@ -77,6 +81,7 @@ defmodule Cabbage.FeatureExecutionTest do
 
         defthen ~r/^I provide Then$/, _vars, %{state: state} do
           assert state == [:when, :given, :given, :initial]
+          :ok
         end
       end
 
@@ -92,6 +97,7 @@ defmodule Cabbage.FeatureExecutionTest do
 
         defgiven ~r/^I provide Given with \'(?<string_1>[^\']+)\' part$/, %{string_1: string_1}, _state do
           assert string_1 == "given dynamic"
+          :ok
         end
 
         defwhen ~r/^I provide When with \"(?<string_1>[^\"]+)\" part and with one more \"(?<string_2>[^\"]+)\" part$/,
@@ -99,6 +105,7 @@ defmodule Cabbage.FeatureExecutionTest do
                 _state do
           assert string_1 == "when dynamic"
           assert string_2 == "another when dynamic"
+          :ok
         end
 
         defthen ~r/^I provide Then with number (?<number_1>\d+) part and with docs part$/,
@@ -111,6 +118,7 @@ defmodule Cabbage.FeatureExecutionTest do
           # TODO: Shouldn't it be casted to a integer?
           assert number_1 == "6"
           assert doc_string == complex_string
+          :ok
         end
 
         defthen ~r/^I provide And with \"(?<string_1>[^\"]+)\" part and with one more \"(?<string_2>[^\"]+)\" part and with table part$/,
@@ -120,6 +128,7 @@ defmodule Cabbage.FeatureExecutionTest do
           assert string_2 == "another and dynamic"
 
           assert table == [%{Age: "30", Name: "John"}, %{Age: "29", Name: "Ann"}]
+          :ok
         end
       end
 
@@ -177,6 +186,7 @@ defmodule Cabbage.FeatureExecutionTest do
           when_value: when_value
         } do
           assert string_1 == given_value <> when_value
+          :ok
         end
 
         defthen ~r/^there is then numeric (?<number_1>\d+) value$/, %{number_1: number_1}, %{
@@ -185,6 +195,7 @@ defmodule Cabbage.FeatureExecutionTest do
         } do
           number_1 = String.to_integer(number_1)
           assert number_1 == given_value + when_value
+          :ok
         end
       end
 

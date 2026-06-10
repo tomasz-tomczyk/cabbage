@@ -14,6 +14,7 @@ defmodule Cabbage.FeatureStateThreadingTest do
 
         defgiven ~r/^I provide And$/, _vars, %{given: given} do
           assert given
+          :ok
         end
 
         defwhen ~r/^I provide When$/, _vars, _state do
@@ -22,6 +23,7 @@ defmodule Cabbage.FeatureStateThreadingTest do
 
         defthen ~r/^I provide Then$/, _vars, _state do
           assert true
+          :ok
         end
       end
 
@@ -54,6 +56,7 @@ defmodule Cabbage.FeatureStateThreadingTest do
 
         defthen ~r/^I provide Then$/, _vars, state do
           assert Enum.reverse(state.steps) == [:given, :and, :when]
+          :ok
         end
       end
 
@@ -72,6 +75,7 @@ defmodule Cabbage.FeatureStateThreadingTest do
 
         defthen ~r/^I provide Then$/, _vars, state do
           assert state.seeded == :yes
+          :ok
         end
       end
 

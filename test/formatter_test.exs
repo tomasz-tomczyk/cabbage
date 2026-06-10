@@ -53,7 +53,11 @@ defmodule Cabbage.FormatterTest do
         defgiven(~r/^I provide Given$/, _vars, _state, do: :ok)
         defgiven(~r/^I provide And$/, _vars, _state, do: :ok)
         defwhen(~r/^I provide When$/, _vars, _state, do: :ok)
-        defthen(~r/^I provide Then$/, _vars, _state, do: assert(true))
+
+        defthen ~r/^I provide Then$/, _vars, _state do
+          assert true
+          :ok
+        end
       end
 
       envelopes = run_with_formatter([PassingFeature])
@@ -87,7 +91,10 @@ defmodule Cabbage.FormatterTest do
       defmodule NormalizableFeature do
         use Cabbage.Feature, file: "simplest.feature"
 
-        defthen(~r/^I provide Then$/, _vars, _state, do: assert(true))
+        defthen ~r/^I provide Then$/, _vars, _state do
+          assert true
+          :ok
+        end
       end
 
       envelopes = run_with_formatter([NormalizableFeature])
@@ -127,7 +134,11 @@ defmodule Cabbage.FormatterTest do
         defgiven(~r/^I provide Given$/, _vars, _state, do: :ok)
         defgiven(~r/^I provide And$/, _vars, _state, do: :ok)
         defwhen(~r/^I provide When$/, _vars, _state, do: :ok)
-        defthen(~r/^I provide Then$/, _vars, _state, do: assert(true))
+
+        defthen ~r/^I provide Then$/, _vars, _state do
+          assert true
+          :ok
+        end
       end
 
       envelopes = run_with_formatter([TestStepsFeature])

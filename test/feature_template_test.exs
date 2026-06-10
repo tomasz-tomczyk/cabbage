@@ -23,6 +23,7 @@ defmodule Cabbage.FeatureTestTest do
 
       defthen ~r/^I provide Then$/, _vars, state do
         assert state.template_module == CustomTemplate
+        :ok
       end
     end
 

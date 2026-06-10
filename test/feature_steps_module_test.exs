@@ -14,6 +14,7 @@ defmodule Cabbage.FeatureStepsModuleTest do
       # Local step; the Given/And/When are satisfied by the imported module.
       defthen ~r/^I provide Then$/, _vars, %{count: count} do
         assert count == 3
+        :ok
       end
     end
 
@@ -38,6 +39,7 @@ defmodule Cabbage.FeatureStepsModuleTest do
       # Given (+1) + And (+1) imported, When (+10) local => 12.
       defthen ~r/^I provide Then$/, _vars, %{count: count} do
         assert count == 12
+        :ok
       end
     end
 
