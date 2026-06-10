@@ -382,8 +382,17 @@ defmodule Cabbage.Feature do
           Cabbage.CucumberExpression.match(expression, step.text)
       end
 
+    # Reserved context keys exposing this step's gherkin table/doc-string. Injected
+    # per step (not threaded) and stripped by `Helpers.remove_hidden_state/1`, so a
+    # cucumber-expression step (whose `vars` is a positional list) can still read them
+    # uniformly without leaking into a user's state-pattern match.
+    table = Macro.escape(step.table_data)
+    doc_string = Macro.escape(step.doc_string)
+
     quote generated: true do
       fn context ->
+        context = Map.merge(context, %{__table__: unquote(table), __doc_string__: unquote(doc_string)})
+
         with {_type, unquote(vars)} <- {:variables, unquote(Macro.escape(matched_data))},
              {_type, state = unquote(state_pattern)} <- {:state, context} do
           new_state =
@@ -401,7 +410,8 @@ defmodule Cabbage.Feature do
             unquote(step.text)
           ])
 
-          new_state
+          # Reserved keys are per-step context, never threaded forward.
+          Map.drop(new_state, [:__table__, :__doc_string__])
         else
           {type, value} ->
             metadata = unquote(Macro.escape(metadata))

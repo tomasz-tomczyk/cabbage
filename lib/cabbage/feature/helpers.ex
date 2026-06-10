@@ -93,7 +93,7 @@ defmodule Cabbage.Feature.Helpers do
     ]
   end
 
-  @keys ~w(async case describe file integration line test type scenario case_templae registered)a
+  @keys ~w(async case describe file integration line test type scenario case_template registered __table__ __doc_string__)a
   def remove_hidden_state(state) do
     Map.drop(state, @keys)
   end
