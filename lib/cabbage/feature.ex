@@ -180,7 +180,7 @@ defmodule Cabbage.Feature do
 
   alias Cabbage.Feature.{Loader, MissingStepError}
 
-  @feature_options [:file, :template, :on_ambiguous_step]
+  @feature_options [:file, :template, :on_ambiguous_step, :import]
 
   # How the compile-time step matcher reacts when more than one registered step pattern
   # matches a scenario step. `:ignore` (the default) preserves the historical first-match-wins
@@ -191,6 +191,7 @@ defmodule Cabbage.Feature do
     has_assigned_feature = !match?(nil, options[:file])
 
     Module.register_attribute(__CALLER__.module, :steps, accumulate: true)
+    Module.register_attribute(__CALLER__.module, :imported_steps, accumulate: true)
     Module.register_attribute(__CALLER__.module, :tags, accumulate: true)
     Module.put_attribute(__CALLER__.module, :on_ambiguous_step, validate_on_ambiguous_step!(options))
 
@@ -202,6 +203,20 @@ defmodule Cabbage.Feature do
       require Logger
 
       unquote(load_features(has_assigned_feature, options))
+      unquote(import_modules(options))
+    end
+  end
+
+  # Imported steps go into a dedicated `@imported_steps` accumulator and are appended
+  # *after* the importer's own `@steps` when the final step list is assembled
+  # (`registered_steps/1`). First-match-wins then resolves a same-pattern collision in
+  # favour of the importer's local step.
+  defp import_modules(options) do
+    for module <- List.wrap(options[:import]) do
+      quote do
+        import_steps(unquote(module))
+        import_tags(unquote(module))
+      end
     end
   end
 
@@ -237,8 +252,19 @@ defmodule Cabbage.Feature do
     end
   end
 
+  # Local steps first (in their usual accumulate newest-first read order), imported steps
+  # appended after — first-match-wins keeps a local step ahead of a same-pattern imported one.
+  # Reversing @imported_steps restores insertion order, so the guarantee is deterministic:
+  # imported steps appear in their source-definition order within each module, modules in
+  # import order.
+  defp registered_steps(module) do
+    local = Module.get_attribute(module, :steps) || []
+    imported = Enum.reverse(Module.get_attribute(module, :imported_steps) || [])
+    local ++ imported
+  end
+
   defmacro expose_metadata(env) do
-    steps = Module.get_attribute(env.module, :steps) || []
+    steps = registered_steps(env.module)
     tags = Module.get_attribute(env.module, :tags) || []
     feature = Module.get_attribute(env.module, :feature)
 
@@ -263,7 +289,7 @@ defmodule Cabbage.Feature do
 
   defmacro __before_compile__(env) do
     scenarios = Module.get_attribute(env.module, :scenarios) || []
-    steps = Module.get_attribute(env.module, :steps) || []
+    steps = registered_steps(env.module)
     tags = Module.get_attribute(env.module, :tags) || []
     on_ambiguous_step = Module.get_attribute(env.module, :on_ambiguous_step) || :ignore
 
@@ -486,11 +512,34 @@ defmodule Cabbage.Feature do
   """
   defmacro import_steps(module) do
     quote do
-      if Code.ensure_compiled(unquote(module)) do
-        for step <- unquote(module).raw_steps() do
-          Module.put_attribute(__MODULE__, :steps, step)
-        end
+      Cabbage.Feature.ensure_step_module!(unquote(module))
+
+      # raw_steps/0 reads newest-first; reverse to source-definition order before
+      # accumulating. The accumulator prepends and registered_steps/1 reverses it
+      # back, so imported steps keep this order in the final step list.
+      for step <- Enum.reverse(unquote(module).raw_steps()) do
+        Module.put_attribute(__MODULE__, :imported_steps, step)
       end
+    end
+  end
+
+  @doc false
+  # Verifies `module` is a compiled step source (a `use Cabbage.Steps` or `use Cabbage.Feature`
+  # module exposing `raw_steps/0`). Raised at the importer's compile time with a clear message
+  # rather than a bare UndefinedFunctionError on `raw_steps/0`.
+  def ensure_step_module!(module) do
+    case Code.ensure_compiled(module) do
+      {:module, ^module} ->
+        unless function_exported?(module, :raw_steps, 0) do
+          raise ArgumentError,
+                "#{inspect(module)} is not a step module: it does not export raw_steps/0. " <>
+                  "Import only modules that `use Cabbage.Steps` or `use Cabbage.Feature`."
+        end
+
+      {:error, reason} ->
+        raise ArgumentError,
+              "cannot import steps from #{inspect(module)}: it is not compiled (#{inspect(reason)}). " <>
+                "Step modules must be compiled first — place them on elixirc_paths (e.g. test/support)."
     end
   end
 
